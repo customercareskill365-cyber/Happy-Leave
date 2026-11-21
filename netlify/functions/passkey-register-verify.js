@@ -1,18 +1,7 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
-import { auditLog, getSessionUser } from './_lib/auth.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
-
-function getRpAndOrigin(event) {
-  const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
-  const rpID = hostHeader.split(':')[0];
-  const proto =
-    event.headers?.['x-forwarded-proto'] ||
-    event.headers?.['X-Forwarded-Proto'] ||
-    (rpID === 'localhost' || rpID === '127.0.0.1' ? 'http' : 'https');
-  const origin = `${proto}://${hostHeader}`;
-  return { rpID, origin };
-}
+import { auditLog, getSessionUser, isPasskeysAllowed } from './_lib/auth.js';
+import { getRpAndOrigin, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
@@ -22,8 +11,15 @@ export default withHandler(async (event) => {
   if (originErr) return originErr;
 
   const pool = getPool();
+  if (!(await isPasskeysAllowed(pool))) {
+    return jsonResponse(403, { error: 'Passkeys are disabled by the administrator.' });
+  }
+
   const user = await getSessionUser(pool, event);
   if (!user) return jsonResponse(401, { error: 'Authentication required.' });
+  if (user.mustChangePin) {
+    return jsonResponse(403, { error: 'Change your initial password before registering a passkey.' });
+  }
 
   const body = parseJsonBody(event);
   if (!body) return jsonResponse(400, { error: 'Invalid JSON payload.' });

@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { hashPin } from '../netlify/functions/_lib/crypto.js';
 import { validateEmployeeIdFormat, validatePasswordFormat } from '../netlify/functions/_lib/auth.js';
+import { normalizePgConnectionConfig, resolveConnectionString } from '../netlify/functions/_lib/db.js';
 
 /**
  * One-time Master Admin provisioning script.
@@ -8,10 +9,7 @@ import { validateEmployeeIdFormat, validatePasswordFormat } from '../netlify/fun
  * Refuses to run if initial setup is already completed or a master_admin exists.
  */
 async function main() {
-  const connectionString =
-    process.env.NETLIFY_DB_URL ||
-    process.env.DATABASE_URL ||
-    process.env.NETLIFY_DATABASE_URL;
+  const connectionString = resolveConnectionString();
 
   if (!connectionString) {
     console.error('Missing NETLIFY_DB_URL or DATABASE_URL.');
@@ -33,11 +31,7 @@ async function main() {
     process.exit(1);
   }
 
-  const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
-  const pool = new pg.Pool({
-    connectionString,
-    ssl: isLocal ? false : { rejectUnauthorized: false },
-  });
+  const pool = new pg.Pool(normalizePgConnectionConfig(connectionString));
 
   const client = await pool.connect();
   try {

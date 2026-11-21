@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hashPin, verifyPin } from '../netlify/functions/_lib/crypto.js';
 import { getIstDateString } from '../netlify/functions/_lib/ist.js';
+import {
+  isValidUuid,
+  validateEmployeeIdFormat,
+  validatePasswordFormat,
+} from '../netlify/functions/_lib/auth.js';
+import {
+  buildSessionCookie,
+  parseCookies,
+  parseJsonBody,
+  requireMethod,
+  requireSameOrigin,
+} from '../netlify/functions/_lib/http.js';
+import { normalizePgConnectionConfig } from '../netlify/functions/_lib/db.js';
 
 test('crypto: hashPin and verifyPin work with salt and reject wrong password', async () => {
   const hash1 = await hashPin('StrongPass!99');
@@ -18,10 +31,53 @@ test('ist: getIstDateString rolls over at midnight IST (18:30 UTC)', () => {
   assert.equal(getIstDateString(afterMidnightIst), '2026-11-21');
 });
 
+test('unit: validators, HTTP helpers, proxy origin checks, and sslmode normalization', () => {
+  assert.equal(validateEmployeeIdFormat('EMP-101'), null);
+  assert.notEqual(validateEmployeeIdFormat('A'), null);
+  assert.equal(validatePasswordFormat('ValidPass123'), null);
+  assert.notEqual(validatePasswordFormat('has space'), null);
+  assert.notEqual(validatePasswordFormat('123'), null);
+  assert.equal(isValidUuid('00000000-0000-4000-8000-000000000000'), true);
+  assert.equal(isValidUuid('EMP-101'), false);
+
+  // parseCookies tolerates malformed URI encoding
+  const cookies = parseCookies({ headers: { cookie: 'bad=100%; tlm_session=abc123' } });
+  assert.equal(cookies.tlm_session, 'abc123');
+  assert.equal(cookies.bad, '100%');
+
+  // requireSameOrigin respects x-forwarded-host and rejects cross-origin / cross-site
+  assert.equal(
+    requireSameOrigin({ headers: { origin: 'http://localhost:5173', host: 'localhost:8888', 'x-forwarded-host': 'localhost:5173' } }),
+    null,
+  );
+  assert.equal(
+    requireSameOrigin({ headers: { origin: 'https://evil.example', host: 'happyleave.netlify.app' } })?.statusCode,
+    403,
+  );
+  assert.equal(
+    requireSameOrigin({ headers: { 'sec-fetch-site': 'cross-site' } })?.statusCode,
+    403,
+  );
+
+  // requireMethod & parseJsonBody
+  assert.equal(requireMethod({ httpMethod: 'DELETE' }, ['GET', 'POST'])?.statusCode, 405);
+  assert.equal(parseJsonBody({ body: '{not-json}' }), null);
+
+  // buildSessionCookie
+  const prodCookie = buildSessionCookie('tok', { headers: { host: 'happyleave.netlify.app', 'x-forwarded-proto': 'https' } });
+  assert.equal(prodCookie.includes('HttpOnly'), true);
+  assert.equal(prodCookie.includes('Secure'), true);
+
+  // normalizePgConnectionConfig strips sslmode query param for remote DBs
+  const remoteCfg = normalizePgConnectionConfig('postgres://user:pass@ep-cool.neon.tech/neondb?sslmode=require');
+  assert.equal(remoteCfg.connectionString.includes('sslmode='), false);
+  assert.deepEqual(remoteCfg.ssl, { rejectUnauthorized: false });
+});
+
 const hasDb = Boolean(process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL);
 
 test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security & Functions v2', { skip: !hasDb }, async () => {
-  const { getPool } = await import('../netlify/functions/_lib/db.js');
+  const { ensureSchema, getPool } = await import('../netlify/functions/_lib/db.js');
   const { default: loginHandler } = await import('../netlify/functions/auth-login.js');
   const { default: meHandler } = await import('../netlify/functions/auth-me.js');
   const { default: changePinHandler } = await import('../netlify/functions/auth-change-pin.js');
@@ -38,9 +94,15 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   const { default: passkeyLoginVerify } = await import('../netlify/functions/passkey-login-verify.js');
 
   const pool = getPool();
+  await ensureSchema(pool);
 
   // Clean slate
   await pool.query('TRUNCATE TABLE audit_logs, sessions, webauthn_challenges, passkey_credentials, daily_availability, employees RESTART IDENTITY CASCADE');
+  await pool.query(
+    `INSERT INTO app_settings (key, value)
+     VALUES ('system', '{"initialSetupCompleted": true, "allowPasskeys": true, "appTitle": "Team Leave Manager"}'::jsonb)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+  );
 
   // Seed 1 Master Admin (simulating provision-admin.js)
   const adminHash = await hashPin('AdminInit!1');
@@ -118,17 +180,23 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.equal(JSON.parse(admLogin.body).user.mustChangePin, true);
   const admCookie = extractCookie(admLogin);
 
-  // Blocked from creating accounts until password changed
-  const admBlocked = await supEmpHandler(
-    makeEvent('POST', { fullName: 'Sup One', employeeId: 'SUP-01', role: 'supervisor', generatePassword: true }, admCookie),
-  );
-  assert.equal(admBlocked.statusCode, 403);
+  // Blocked from ALL protected admin/supervisor endpoints until initial password is changed (SEC-03)
+  assert.equal((await supEmpHandler(makeEvent('POST', { fullName: 'Sup One', employeeId: 'SUP-01', role: 'supervisor', generatePassword: true }, admCookie))).statusCode, 403);
+  assert.equal((await supAvailHandler(makeEvent('GET', null, admCookie))).statusCode, 403);
+  assert.equal((await auditHandler(makeEvent('GET', null, admCookie))).statusCode, 403);
+  assert.equal((await settingsHandler(makeEvent('GET', null, admCookie))).statusCode, 403);
 
   // Change Master Admin password
   const admPwdChange = await changePinHandler(
     makeEvent('POST', { currentPassword: 'AdminInit!1', newPassword: 'AdminStrong!2026' }, admCookie),
   );
   assert.equal(admPwdChange.statusCode, 200);
+
+  // Non-UUID targetId in PATCH returns 400 (not 500) (BE-03)
+  const badUuidPatch = await supEmpHandler(
+    makeEvent('PATCH', { id: 'NOT-A-UUID', action: 'deactivate' }, admCookie),
+  );
+  assert.equal(badUuidPatch.statusCode, 400);
 
   // 3. Master Admin creates Supervisor SUP-01 with auto-generated one-time password
   const createSup = await supEmpHandler(
@@ -231,7 +299,16 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.equal(admAvail.counts.activeSupervisors, 1);
   assert.equal(admAvail.employees.find((e) => e.employeeId === 'EMP-101').leaveReason, 'Sick Leave — Fever');
 
-  // 6. Master Admin resets Supervisor password, deactivates & reactivates Supervisor
+  // 6. Rate-limiting & 15-minute lockout on EMP-101 after 5 failed attempts
+  for (let i = 0; i < 4; i++) {
+    assert.equal((await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: 'WrongPassword' }))).statusCode, 401);
+  }
+  assert.equal((await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: 'WrongPassword' }))).statusCode, 429);
+  // Locked out from passkey login options too (SEC-02)
+  const lockedPkRes = await passkeyLoginOpts(makeV2Request('http://localhost:8888/api/passkey-login-options', 'POST', { employeeId: 'EMP-101' }));
+  assert.equal(lockedPkRes.status, 429);
+
+  // 7. Master Admin resets Supervisor password, deactivates & reactivates Supervisor
   const resetSup = await supEmpHandler(
     makeEvent('PATCH', { id: supUuid, action: 'reset_password', generatePassword: true }, admCookie),
   );
@@ -245,31 +322,42 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
     (await supEmpHandler(makeEvent('PATCH', { id: supUuid, action: 'deactivate' }, admCookie))).statusCode,
     200,
   );
+  // Deactivated user cannot log in -> 403
+  assert.equal(
+    (await loginHandler(makeEvent('POST', { employeeId: 'SUP-01', password: JSON.parse(resetSup.body).temporaryPassword }))).statusCode,
+    403,
+  );
+
   assert.equal(
     (await supEmpHandler(makeEvent('PATCH', { id: supUuid, action: 'reactivate', generatePassword: true }, admCookie))).statusCode,
     200,
   );
 
-  // 7. Audit logs: Master Admin sees supervisor_created; Supervisor does NOT
+  // 8. Audit logs: Master Admin sees supervisor_created; Supervisor does NOT
   const admLogs = JSON.parse((await auditHandler(makeEvent('GET', null, admCookie))).body).logs;
   assert.equal(admLogs.some((l) => l.action === 'supervisor_created'), true);
 
-  // Re-login Supervisor to check scoped audit logs
-  const supReactLogin = await loginHandler(makeEvent('POST', { employeeId: 'SUP-01', password: (await (async () => {
-    const r = await supEmpHandler(makeEvent('PATCH', { id: supUuid, action: 'reset_password', generatePassword: true }, admCookie));
-    return JSON.parse(r.body).temporaryPassword;
-  })()) }));
+  // Re-login Supervisor & change temp password to check scoped audit logs
+  const supTemp2 = JSON.parse(
+    (await supEmpHandler(makeEvent('PATCH', { id: supUuid, action: 'reset_password', generatePassword: true }, admCookie))).body,
+  ).temporaryPassword;
+  const supReactLogin = await loginHandler(makeEvent('POST', { employeeId: 'SUP-01', password: supTemp2 }));
   const supCookie2 = extractCookie(supReactLogin);
+  await changePinHandler(makeEvent('POST', { currentPassword: supTemp2, newPassword: 'SupStrong!2027' }, supCookie2));
+
   const supLogs = JSON.parse((await auditHandler(makeEvent('GET', null, supCookie2))).body).logs;
   assert.equal(supLogs.some((l) => l.action === 'supervisor_created'), false);
   assert.equal(supLogs.some((l) => l.action === 'employee_created'), true);
 
-  // 8. Master Admin settings update
+  // 9. Master Admin settings update & allowPasskeys: false enforcement (SEC-01)
   const updSettings = await settingsHandler(
     makeEvent('PATCH', { appTitle: 'Contact Centre Leave', allowPasskeys: false }, admCookie),
   );
   assert.equal(updSettings.statusCode, 200);
   assert.equal(JSON.parse(updSettings.body).settings.initialSetupCompleted, true);
+
+  const pkDisabledRes = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST', null, empCookie));
+  assert.equal(pkDisabledRes.status, 403);
 
   await logoutHandler(makeEvent('POST', null, admCookie));
   await pool.end();

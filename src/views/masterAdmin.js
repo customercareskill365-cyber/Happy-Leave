@@ -686,7 +686,11 @@ export function bindMasterAdminEvents(root, state, { refreshMasterAdmin, refresh
     exportBtn.addEventListener('click', () => {
       const rows = state.supData?.employees || [];
       const dateStr = state.supData?.availabilityDate || 'today';
-      const csvCell = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+      const csvCell = (val) => {
+        const s = String(val ?? '');
+        const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+        return `"${safe.replace(/"/g, '""')}"`;
+      };
       const lines = [
         ['User ID', 'Full Name', 'Role', 'Status', 'Leave Reason', 'Last Updated (IST)'].map(csvCell).join(','),
         ...rows.map((r) =>

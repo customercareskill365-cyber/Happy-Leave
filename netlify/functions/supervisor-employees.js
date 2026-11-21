@@ -151,6 +151,9 @@ export default withHandler(async (event) => {
   if (!targetId || !action) {
     return jsonResponse(400, { error: 'Account id and action are required.' });
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId)) {
+    return jsonResponse(400, { error: 'Invalid account id format.' });
+  }
 
   const { rows: existingRows } = await pool.query(
     'SELECT id, employee_id, role, is_active FROM employees WHERE id = $1',

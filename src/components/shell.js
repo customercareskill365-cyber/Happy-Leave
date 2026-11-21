@@ -25,8 +25,6 @@ export function renderShell({
   const isSupervisor = user?.role === 'supervisor';
 
   const roleLabel = isMaster ? 'Master Admin' : isSupervisor ? 'Supervisor' : 'Employee';
-  const portalTarget = isMaster ? '/admin' : isSupervisor ? '/supervisor' : '/login';
-  const portalLabel = isMaster ? 'Master Admin' : isSupervisor ? 'Supervisor View' : 'Sign In';
 
   const userFooter = user
     ? `
@@ -56,6 +54,30 @@ export function renderShell({
     `;
 
   const syncText = lastSyncedAt ? `Synced ${formatIstClock(new Date(lastSyncedAt))}` : 'Sync';
+
+  let mobileThirdSlot = '';
+  if (!user) {
+    mobileThirdSlot = `
+      <a href="/login" data-link class="${mobileNavClass('/login')}">
+        <i data-lucide="log-in" class="w-5 h-5" aria-hidden="true"></i>
+        <span>Sign In</span>
+      </a>
+    `;
+  } else if (isSupervisor) {
+    mobileThirdSlot = `
+      <a href="/supervisor" data-link class="${mobileNavClass('/supervisor')}">
+        <i data-lucide="shield-check" class="w-5 h-5" aria-hidden="true"></i>
+        <span>Supervisor</span>
+      </a>
+    `;
+  } else {
+    mobileThirdSlot = `
+      <button type="button" data-action="logout" class="flex flex-col items-center justify-center gap-1 py-2 text-light-on-surface-variant font-label text-label-sm">
+        <i data-lucide="log-out" class="w-5 h-5" aria-hidden="true"></i>
+        <span>Sign Out</span>
+      </button>
+    `;
+  }
 
   return `
     <div class="min-h-screen flex bg-light-surface pb-20 md:pb-0">
@@ -142,6 +164,14 @@ export function renderShell({
               <span class="w-2 h-2 rounded-full bg-available" aria-hidden="true"></span>
               <span id="syncStatusText" class="font-mono text-mono-sm text-on-available-container tabular-nums">${escapeHtml(syncText)}</span>
             </button>
+            ${
+              user
+                ? `<button type="button" data-action="logout" title="Sign Out" class="md:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-light-outline-variant text-light-on-surface-variant font-label text-label-sm">
+                    <i data-lucide="log-out" class="w-3.5 h-3.5" aria-hidden="true"></i>
+                    <span>Sign Out</span>
+                  </button>`
+                : ''
+            }
             ${headerActionsHtml}
           </div>
         </header>
@@ -161,10 +191,7 @@ export function renderShell({
           <i data-lucide="${isMaster ? 'shield-check' : 'user-check'}" class="w-5 h-5" aria-hidden="true"></i>
           <span>${isMaster ? 'Admin' : 'My Status'}</span>
         </a>
-        <a href="${portalTarget}" data-link class="${mobileNavClass(isMaster ? '/admin' : isSupervisor ? '/supervisor' : '/login')}">
-          <i data-lucide="${user ? (isMaster || isSupervisor ? 'shield-check' : 'user') : 'log-in'}" class="w-5 h-5" aria-hidden="true"></i>
-          <span>${user ? portalLabel.split(' ')[0] : 'Sign In'}</span>
-        </a>
+        ${mobileThirdSlot}
       </nav>
     </div>
   `;

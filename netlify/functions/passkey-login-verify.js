@@ -1,18 +1,15 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
-import { auditLog, createSession, validateEmployeeIdFormat } from './_lib/auth.js';
-import { buildSessionCookie, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
-
-function getRpAndOrigin(event) {
-  const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
-  const rpID = hostHeader.split(':')[0];
-  const proto =
-    event.headers?.['x-forwarded-proto'] ||
-    event.headers?.['X-Forwarded-Proto'] ||
-    (rpID === 'localhost' || rpID === '127.0.0.1' ? 'http' : 'https');
-  const origin = `${proto}://${hostHeader}`;
-  return { rpID, origin };
-}
+import { auditLog, createSession, isPasskeysAllowed, validateEmployeeIdFormat } from './_lib/auth.js';
+import {
+  buildSessionCookie,
+  getRpAndOrigin,
+  jsonResponse,
+  parseJsonBody,
+  requireMethod,
+  requireSameOrigin,
+  withHandler,
+} from './_lib/http.js';
 
 export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
@@ -20,6 +17,11 @@ export default withHandler(async (event) => {
 
   const originErr = requireSameOrigin(event);
   if (originErr) return originErr;
+
+  const pool = getPool();
+  if (!(await isPasskeysAllowed(pool))) {
+    return jsonResponse(403, { error: 'Passkeys are disabled by the administrator.' });
+  }
 
   const body = parseJsonBody(event);
   if (!body || !body.assertion) return jsonResponse(400, { error: 'Invalid passkey payload.' });
@@ -29,15 +31,20 @@ export default withHandler(async (event) => {
     return jsonResponse(400, { error: 'Valid User ID is required.' });
   }
 
-  const pool = getPool();
   const { rows: empRows } = await pool.query(
-    'SELECT id, full_name, employee_id, role, is_active, must_change_pin FROM employees WHERE employee_id = $1',
+    'SELECT id, full_name, employee_id, role, is_active, must_change_pin, locked_until FROM employees WHERE employee_id = $1',
     [employeeId],
   );
   if (empRows.length === 0 || !empRows[0].is_active) {
     return jsonResponse(401, { error: 'Account unavailable.' });
   }
   const emp = empRows[0];
+  if (emp.locked_until && new Date(emp.locked_until) > new Date()) {
+    return jsonResponse(429, { error: 'Account temporarily locked due to failed login attempts.' });
+  }
+  if (emp.must_change_pin) {
+    return jsonResponse(403, { error: 'Please sign in with your temporary password first.' });
+  }
 
   const { rows: chalRows } = await pool.query(
     `DELETE FROM webauthn_challenges
@@ -88,7 +95,7 @@ export default withHandler(async (event) => {
     [verification.authenticationInfo.newCounter, cred.id],
   );
   await pool.query(
-    'UPDATE employees SET last_login_at = now(), updated_at = now() WHERE id = $1',
+    'UPDATE employees SET failed_login_attempts = 0, locked_until = NULL, last_login_at = now(), updated_at = now() WHERE id = $1',
     [emp.id],
   );
 

@@ -14,6 +14,9 @@ export default withHandler(async (event) => {
   if (!isMasterAdmin(user)) {
     return jsonResponse(403, { error: 'Master Admin access required.' });
   }
+  if (user.mustChangePin) {
+    return jsonResponse(403, { error: 'Please change your initial password first.' });
+  }
 
   const method = event.httpMethod.toUpperCase();
 

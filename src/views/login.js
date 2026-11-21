@@ -173,6 +173,11 @@ export function bindLoginEvents(root, state, { navigate, refreshSession, refresh
         onStateChange();
         return;
       }
+      if (/\s/.test(newPassword)) {
+        state.loginError = 'Password cannot contain spaces.';
+        onStateChange();
+        return;
+      }
 
       state.loginLoading = true;
       state.loginError = '';
@@ -183,7 +188,8 @@ export function bindLoginEvents(root, state, { navigate, refreshSession, refresh
         await refreshSession();
         state.loginLoading = false;
         state.loginSuccess = 'Password updated successfully.';
-        navigate(getRoleRedirect(state.user?.role, null));
+        const params = new URLSearchParams(window.location.search);
+        navigate(getRoleRedirect(state.user?.role, params.get('next')));
       } catch (err) {
         state.loginLoading = false;
         state.loginError = err.message || 'Could not update password.';
@@ -210,9 +216,14 @@ export function bindLoginEvents(root, state, { navigate, refreshSession, refresh
         const assertion = await startAuthentication({ optionsJSON: options });
         const res = await api.verifyPasskeyLogin(employeeId, assertion);
         await refreshSession();
-        await refreshPublic();
         state.loginLoading = false;
-        navigate(getRoleRedirect(res.user?.role, null));
+        if (res.user?.mustChangePin) {
+          onStateChange();
+          return;
+        }
+        await refreshPublic();
+        const params = new URLSearchParams(window.location.search);
+        navigate(getRoleRedirect(res.user?.role, params.get('next')));
       } catch (err) {
         state.loginLoading = false;
         state.loginError = err.message || 'Passkey sign-in failed or was cancelled.';
