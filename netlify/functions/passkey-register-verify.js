@@ -1,7 +1,7 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
 import { auditLog, getSessionUser } from './_lib/auth.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 function getRpAndOrigin(event) {
   const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
@@ -14,7 +14,7 @@ function getRpAndOrigin(event) {
   return { rpID, origin };
 }
 
-export async function handler(event) {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -71,4 +71,4 @@ export async function handler(event) {
   });
 
   return jsonResponse(200, { ok: true });
-}
+});

@@ -5,7 +5,7 @@ import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHand
 
 const VALID_STATUSES = new Set(['office', 'wfh', 'leave']);
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 

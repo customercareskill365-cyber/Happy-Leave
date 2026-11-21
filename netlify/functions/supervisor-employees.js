@@ -12,7 +12,7 @@ import {
 } from './_lib/auth.js';
 import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET', 'POST', 'PATCH']);
   if (methodErr) return methodErr;
 

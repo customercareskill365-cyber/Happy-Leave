@@ -1,9 +1,9 @@
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
 import { validateEmployeeIdFormat } from './_lib/auth.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -15,7 +15,7 @@ export async function handler(event) {
 
   const employeeId = typeof body.employeeId === 'string' ? body.employeeId.trim().toUpperCase() : '';
   if (validateEmployeeIdFormat(employeeId)) {
-    return jsonResponse(400, { error: 'Valid Employee ID is required.' });
+    return jsonResponse(400, { error: 'Valid User ID is required.' });
   }
 
   const pool = getPool();
@@ -24,11 +24,11 @@ export async function handler(event) {
     [employeeId],
   );
   if (empRows.length === 0 || !empRows[0].is_active) {
-    return jsonResponse(404, { error: 'No active passkey found for this Employee ID.' });
+    return jsonResponse(404, { error: 'No active passkey found for this User ID.' });
   }
   const emp = empRows[0];
   if (emp.must_change_pin) {
-    return jsonResponse(403, { error: 'Please sign in with your temporary PIN first.' });
+    return jsonResponse(403, { error: 'Please sign in with your temporary password first.' });
   }
 
   const { rows: creds } = await pool.query(
@@ -36,7 +36,7 @@ export async function handler(event) {
     [emp.id],
   );
   if (creds.length === 0) {
-    return jsonResponse(404, { error: 'No passkey registered for this Employee ID. Sign in with PIN first.' });
+    return jsonResponse(404, { error: 'No passkey registered for this User ID. Sign in with password first.' });
   }
 
   const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
@@ -62,4 +62,4 @@ export async function handler(event) {
   );
 
   return jsonResponse(200, options);
-}
+});

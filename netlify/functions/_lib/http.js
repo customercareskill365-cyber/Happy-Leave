@@ -14,19 +14,80 @@ export function jsonResponse(statusCode, body, extraHeaders = {}) {
   };
 }
 
+function isWebRequest(req) {
+  return (
+    req &&
+    typeof req.url === 'string' &&
+    typeof req.method === 'string' &&
+    req.headers &&
+    typeof req.headers.forEach === 'function'
+  );
+}
+
+async function normalizeToEvent(reqOrEvent) {
+  if (!isWebRequest(reqOrEvent)) {
+    return { isV2: false, event: reqOrEvent };
+  }
+
+  const headers = {};
+  reqOrEvent.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  const url = new URL(reqOrEvent.url);
+  const queryStringParameters = {};
+  for (const [k, v] of url.searchParams.entries()) {
+    queryStringParameters[k] = v;
+  }
+
+  const method = (reqOrEvent.method || 'GET').toUpperCase();
+  let body = null;
+  if (method !== 'GET' && method !== 'HEAD') {
+    const text = await reqOrEvent.text();
+    body = text || null;
+  }
+
+  return {
+    isV2: true,
+    event: {
+      httpMethod: method,
+      headers,
+      queryStringParameters,
+      body,
+      isBase64Encoded: false,
+      rawUrl: reqOrEvent.url,
+    },
+  };
+}
+
+function toResult(resObj, isV2) {
+  if (!isV2) return resObj;
+  return new Response(resObj.body ?? '', {
+    status: resObj.statusCode || 200,
+    headers: resObj.headers || {},
+  });
+}
+
 export function withHandler(fn) {
-  return async (event, context) => {
+  return async (reqOrEvent, context) => {
+    let isV2 = isWebRequest(reqOrEvent);
     try {
-      return await fn(event, context);
+      const normalized = await normalizeToEvent(reqOrEvent);
+      isV2 = normalized.isV2;
+      const result = await fn(normalized.event, context);
+      return toResult(result, isV2);
     } catch (err) {
       if (err?.name === 'DbUnavailableError') {
-        return jsonResponse(503, { error: err.message });
+        return toResult(jsonResponse(503, { error: err.message }), isV2);
       }
       if (err?.code === 'ECONNREFUSED' || err?.code === 'ENOTFOUND' || err?.code === '28P01') {
-        return jsonResponse(503, { error: 'Database connection unavailable. Check database configuration.' });
+        return toResult(
+          jsonResponse(503, { error: 'Database connection unavailable. Check database configuration.' }),
+          isV2,
+        );
       }
       console.error('Unhandled function error:', err?.message || err);
-      return jsonResponse(500, { error: 'Internal server error.' });
+      return toResult(jsonResponse(500, { error: 'Internal server error.' }), isV2);
     }
   };
 }
@@ -90,6 +151,7 @@ export function getSessionCookie(event) {
 function isSecureRequest(event) {
   const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'];
   if (proto === 'https') return true;
+  if (typeof event.rawUrl === 'string' && event.rawUrl.startsWith('https://')) return true;
   const host = event.headers?.host || event.headers?.Host || '';
   return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
 }

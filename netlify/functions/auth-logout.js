@@ -2,7 +2,7 @@ import { getPool } from './_lib/db.js';
 import { sha256Hex } from './_lib/crypto.js';
 import { clearSessionCookie, getSessionCookie, jsonResponse, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 

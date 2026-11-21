@@ -1,7 +1,7 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
 import { auditLog, createSession, validateEmployeeIdFormat } from './_lib/auth.js';
-import { buildSessionCookie, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { buildSessionCookie, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 function getRpAndOrigin(event) {
   const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
@@ -14,7 +14,7 @@ function getRpAndOrigin(event) {
   return { rpID, origin };
 }
 
-export async function handler(event) {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -26,7 +26,7 @@ export async function handler(event) {
 
   const employeeId = typeof body.employeeId === 'string' ? body.employeeId.trim().toUpperCase() : '';
   if (validateEmployeeIdFormat(employeeId)) {
-    return jsonResponse(400, { error: 'Valid Employee ID is required.' });
+    return jsonResponse(400, { error: 'Valid User ID is required.' });
   }
 
   const pool = getPool();
@@ -113,4 +113,4 @@ export async function handler(event) {
     },
     { 'Set-Cookie': buildSessionCookie(token, event) },
   );
-}
+});

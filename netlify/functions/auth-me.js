@@ -3,7 +3,7 @@ import { getSessionUser } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
 import { jsonResponse, requireMethod, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET']);
   if (methodErr) return methodErr;
 

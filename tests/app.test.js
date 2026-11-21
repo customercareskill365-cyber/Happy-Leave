@@ -20,18 +20,22 @@ test('ist: getIstDateString rolls over at midnight IST (18:30 UTC)', () => {
 
 const hasDb = Boolean(process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL);
 
-test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs & Security', { skip: !hasDb }, async () => {
+test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security & Functions v2', { skip: !hasDb }, async () => {
   const { getPool } = await import('../netlify/functions/_lib/db.js');
-  const { handler: loginHandler } = await import('../netlify/functions/auth-login.js');
-  const { handler: meHandler } = await import('../netlify/functions/auth-me.js');
-  const { handler: changePinHandler } = await import('../netlify/functions/auth-change-pin.js');
-  const { handler: logoutHandler } = await import('../netlify/functions/auth-logout.js');
-  const { handler: publicAvailHandler } = await import('../netlify/functions/availability-public.js');
-  const { handler: updateAvailHandler } = await import('../netlify/functions/availability-update.js');
-  const { handler: supAvailHandler } = await import('../netlify/functions/supervisor-availability.js');
-  const { handler: supEmpHandler } = await import('../netlify/functions/supervisor-employees.js');
-  const { handler: auditHandler } = await import('../netlify/functions/audit-logs.js');
-  const { handler: settingsHandler } = await import('../netlify/functions/admin-settings.js');
+  const { default: loginHandler } = await import('../netlify/functions/auth-login.js');
+  const { default: meHandler } = await import('../netlify/functions/auth-me.js');
+  const { default: changePinHandler } = await import('../netlify/functions/auth-change-pin.js');
+  const { default: logoutHandler } = await import('../netlify/functions/auth-logout.js');
+  const { default: publicAvailHandler } = await import('../netlify/functions/availability-public.js');
+  const { default: updateAvailHandler } = await import('../netlify/functions/availability-update.js');
+  const { default: supAvailHandler } = await import('../netlify/functions/supervisor-availability.js');
+  const { default: supEmpHandler } = await import('../netlify/functions/supervisor-employees.js');
+  const { default: auditHandler } = await import('../netlify/functions/audit-logs.js');
+  const { default: settingsHandler } = await import('../netlify/functions/admin-settings.js');
+  const { default: passkeyRegOpts } = await import('../netlify/functions/passkey-register-options.js');
+  const { default: passkeyRegVerify } = await import('../netlify/functions/passkey-register-verify.js');
+  const { default: passkeyLoginOpts } = await import('../netlify/functions/passkey-login-options.js');
+  const { default: passkeyLoginVerify } = await import('../netlify/functions/passkey-login-verify.js');
 
   const pool = getPool();
 
@@ -67,7 +71,39 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs & Securit
     isBase64Encoded: false,
   });
 
+  const makeV2Request = (url, method = 'GET', body = null, cookie = '') =>
+    new Request(url, {
+      method,
+      headers: {
+        host: 'localhost:8888',
+        'content-type': 'application/json',
+        ...(cookie ? { cookie } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
   const extractCookie = (res) => (res.headers?.['Set-Cookie'] || '').split(';')[0];
+
+  // 0. Test Functions v2 Web Request / Response contract across endpoints
+  const v2PubRes = await publicAvailHandler(makeV2Request('http://localhost:8888/api/availability-public', 'GET'));
+  assert.equal(v2PubRes instanceof Response, true);
+  assert.equal(v2PubRes.status, 200);
+  const v2PubBody = await v2PubRes.json();
+  assert.equal(typeof v2PubBody.availabilityDate, 'string');
+
+  const v2MeRes = await meHandler(makeV2Request('http://localhost:8888/api/auth-me', 'GET'));
+  assert.equal(v2MeRes instanceof Response, true);
+  assert.equal(v2MeRes.status, 200);
+
+  // Test all 4 passkey endpoints via Functions v2 Web Request
+  const v2PkRegOptsRes = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST'));
+  assert.equal(v2PkRegOptsRes.status, 401);
+  const v2PkRegVerRes = await passkeyRegVerify(makeV2Request('http://localhost:8888/api/passkey-register-verify', 'POST', {}));
+  assert.equal(v2PkRegVerRes.status, 401);
+  const v2PkLogOptsRes = await passkeyLoginOpts(makeV2Request('http://localhost:8888/api/passkey-login-options', 'POST', { employeeId: 'EMP-404' }));
+  assert.equal(v2PkLogOptsRes.status, 404);
+  const v2PkLogVerRes = await passkeyLoginVerify(makeV2Request('http://localhost:8888/api/passkey-login-verify', 'POST', { employeeId: 'EMP-404', assertion: {} }));
+  assert.equal(v2PkLogVerRes.status, 401);
 
   // 1. Unauthenticated checks
   assert.equal((await supAvailHandler(makeEvent('GET'))).statusCode, 401);
@@ -166,6 +202,10 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs & Securit
     (await changePinHandler(makeEvent('POST', { currentPassword: empTempPwd, newPassword: 'EmpStrong!2026' }, empCookie))).statusCode,
     200,
   );
+
+  // Employee can request passkey registration options once initial password is changed
+  const pkOptsOk = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST', null, empCookie));
+  assert.equal(pkOptsOk.status, 200);
 
   // Employee CANNOT access employee management, audit logs, or supervisor availability -> 403
   assert.equal((await supEmpHandler(makeEvent('GET', null, empCookie))).statusCode, 403);

@@ -1,7 +1,7 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
 import { getSessionUser } from './_lib/auth.js';
-import { jsonResponse, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { jsonResponse, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 function getRpConfig(event) {
   const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
@@ -9,7 +9,7 @@ function getRpConfig(event) {
   return { rpName: 'Team Leave Manager', rpID };
 }
 
-export async function handler(event) {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -20,7 +20,7 @@ export async function handler(event) {
   const user = await getSessionUser(pool, event);
   if (!user) return jsonResponse(401, { error: 'Authentication required.' });
   if (user.mustChangePin) {
-    return jsonResponse(403, { error: 'Change your initial PIN before registering a passkey.' });
+    return jsonResponse(403, { error: 'Change your initial password before registering a passkey.' });
   }
 
   const { rows: existing } = await pool.query(
@@ -56,4 +56,4 @@ export async function handler(event) {
   );
 
   return jsonResponse(200, options);
-}
+});
