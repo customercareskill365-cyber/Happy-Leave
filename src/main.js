@@ -7,6 +7,7 @@ import { renderDashboardView, bindDashboardEvents } from './views/dashboard.js';
 import { renderLoginView, bindLoginEvents } from './views/login.js';
 import { renderUpdateStatusView, bindUpdateStatusEvents } from './views/updateStatus.js';
 import { renderSupervisorView, bindSupervisorEvents } from './views/supervisor.js';
+import { renderMasterAdminView, bindMasterAdminEvents } from './views/masterAdmin.js';
 
 const app = document.getElementById('app');
 
@@ -17,11 +18,11 @@ const state = {
   publicLoading: true,
   publicError: '',
   lastSyncedAt: null,
+  lastFetchedMs: 0,
 
   dashboardFilter: 'all',
   dashboardSearch: '',
 
-  loginTab: 'employee',
   loginError: '',
   loginSuccess: '',
   loginLoading: false,
@@ -41,6 +42,7 @@ const state = {
   supTab: 'availability',
   supData: null,
   supEmployees: null,
+  supAuditLogs: [],
   supLoading: false,
   supError: '',
   supFilter: 'all',
@@ -49,10 +51,21 @@ const state = {
   empStatusFilter: 'active',
   supModal: null,
   supNotice: '',
+
+  adminTab: 'dashboard',
+  adminEmployees: [],
+  adminSupervisors: [],
+  auditLogs: [],
+  adminSettings: null,
+  adminLoading: false,
+  adminError: '',
+  adminNotice: '',
+  adminModal: null,
+  oneTimePasswordModal: null,
 };
 
 function normalizeRoute(pathname) {
-  if (pathname === '/update' || pathname === '/login' || pathname === '/supervisor') {
+  if (pathname === '/update' || pathname === '/login' || pathname === '/supervisor' || pathname === '/admin') {
     return pathname;
   }
   return '/';
@@ -62,7 +75,9 @@ function navigate(path) {
   const url = new URL(path, window.location.origin);
   window.history.pushState({}, '', url.pathname + url.search);
   state.route = normalizeRoute(url.pathname);
-  if (state.route === '/supervisor' && state.user?.role === 'supervisor') {
+  if (state.route === '/admin' && state.user?.role === 'master_admin') {
+    refreshMasterAdmin();
+  } else if (state.route === '/supervisor' && (state.user?.role === 'supervisor' || state.user?.role === 'master_admin')) {
     refreshSupervisor();
   }
   render();
@@ -90,6 +105,7 @@ async function refreshPublic() {
     state.publicData = data;
     state.publicError = '';
     state.lastSyncedAt = new Date().toISOString();
+    state.lastFetchedMs = Date.now();
   } catch (err) {
     state.publicError = err.message || 'Failed to load availability.';
   } finally {
@@ -98,14 +114,20 @@ async function refreshPublic() {
 }
 
 async function refreshSupervisor() {
-  if (!state.user || state.user.role !== 'supervisor') return;
+  if (!state.user || (state.user.role !== 'supervisor' && state.user.role !== 'master_admin')) return;
   state.supLoading = true;
   try {
-    const [avail, emps] = await Promise.all([api.getSupervisorDashboard(), api.getEmployees()]);
+    const [avail, emps, logs] = await Promise.all([
+      api.getSupervisorDashboard(),
+      api.getAccounts('employee'),
+      api.getAuditLogs(100),
+    ]);
     state.supData = avail;
     state.supEmployees = emps.employees || [];
+    state.supAuditLogs = logs.logs || [];
     state.supError = '';
     state.lastSyncedAt = new Date().toISOString();
+    state.lastFetchedMs = Date.now();
   } catch (err) {
     state.supError = err.message || 'Failed to load supervisor data.';
   } finally {
@@ -114,8 +136,34 @@ async function refreshSupervisor() {
   }
 }
 
+async function refreshMasterAdmin() {
+  if (!state.user || state.user.role !== 'master_admin') return;
+  state.adminLoading = true;
+  try {
+    const [avail, emps, sups, logs, settings] = await Promise.all([
+      api.getSupervisorDashboard(),
+      api.getAccounts('employee'),
+      api.getAccounts('supervisor'),
+      api.getAuditLogs(150),
+      api.getAdminSettings(),
+    ]);
+    state.supData = avail;
+    state.adminEmployees = emps.employees || [];
+    state.adminSupervisors = sups.employees || [];
+    state.auditLogs = logs.logs || [];
+    state.adminSettings = settings.settings || null;
+    state.adminError = '';
+    state.lastSyncedAt = new Date().toISOString();
+    state.lastFetchedMs = Date.now();
+  } catch (err) {
+    state.adminError = err.message || 'Failed to load Master Admin data.';
+  } finally {
+    state.adminLoading = false;
+    render();
+  }
+}
+
 function render(opts = {}) {
-  // Enforce mandatory PIN change if logged in with temporary PIN
   if (state.user?.mustChangePin && state.route !== '/login') {
     state.route = '/login';
   }
@@ -131,13 +179,16 @@ function render(opts = {}) {
   } else {
     let title = 'Team Leave Manager';
     let subtitle = 'Public daily work location & availability — Resets 12:00 AM IST';
-    let isSupervisorBadge = false;
-    let headerActionsHtml = `
-      <a href="/update" data-link class="inline-flex items-center justify-center gap-2 px-3.5 py-2 min-h-10 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
-        <i data-lucide="user-check" class="w-4 h-4" aria-hidden="true"></i>
-        <span class="font-label text-label-md">Update My Status</span>
-      </a>
-    `;
+    let roleBadgeText = '';
+    let headerActionsHtml =
+      state.user?.role === 'master_admin'
+        ? ''
+        : `
+          <a href="/update" data-link class="inline-flex items-center justify-center gap-2 px-3.5 py-2 min-h-10 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
+            <i data-lucide="user-check" class="w-4 h-4" aria-hidden="true"></i>
+            <span class="font-label text-label-md">Update My Status</span>
+          </a>
+        `;
     let contentHtml = '';
 
     if (state.route === '/') {
@@ -150,9 +201,15 @@ function render(opts = {}) {
     } else if (state.route === '/supervisor') {
       title = 'Supervisor Dashboard';
       subtitle = 'Authorized shift oversight, confidential leave reasons & employee management';
-      isSupervisorBadge = true;
+      roleBadgeText = 'Supervisor Access';
       headerActionsHtml = '';
       contentHtml = renderSupervisorView(state);
+    } else if (state.route === '/admin') {
+      title = 'Master Admin Dashboard';
+      subtitle = 'Centralized supervisor, employee, availability & security governance';
+      roleBadgeText = 'Master Admin';
+      headerActionsHtml = '';
+      contentHtml = renderMasterAdminView(state);
     }
 
     app.innerHTML = renderShell({
@@ -161,7 +218,7 @@ function render(opts = {}) {
       subtitle,
       user: state.user,
       lastSyncedAt: state.lastSyncedAt,
-      isSupervisorBadge,
+      roleBadgeText,
       headerActionsHtml,
       contentHtml,
     });
@@ -172,10 +229,11 @@ function render(opts = {}) {
       bindUpdateStatusEvents(app, state, { refreshSession, refreshPublic, onStateChange: render });
     } else if (state.route === '/supervisor') {
       bindSupervisorEvents(app, state, { refreshSupervisor, refreshPublic, onStateChange: render });
+    } else if (state.route === '/admin') {
+      bindMasterAdminEvents(app, state, { refreshMasterAdmin, refreshPublic, onStateChange: render });
     }
   }
 
-  // Global delegated link & logout & manual-sync handlers
   app.querySelectorAll('a[data-link]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -189,6 +247,9 @@ function render(opts = {}) {
       state.user = null;
       state.supData = null;
       state.supEmployees = null;
+      state.adminEmployees = [];
+      state.adminSupervisors = [];
+      state.auditLogs = [];
       state.statusForm.selectedStatus = null;
       navigate('/');
     });
@@ -197,7 +258,9 @@ function render(opts = {}) {
   app.querySelectorAll('[data-action="manual-sync"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       await refreshPublic();
-      if (state.route === '/supervisor' && state.user?.role === 'supervisor') {
+      if (state.route === '/admin' && state.user?.role === 'master_admin') {
+        await refreshMasterAdmin();
+      } else if (state.route === '/supervisor' && (state.user?.role === 'supervisor' || state.user?.role === 'master_admin')) {
         await refreshSupervisor();
       } else {
         render();
@@ -218,7 +281,7 @@ function render(opts = {}) {
   }
 }
 
-// Live IST clock updater (every 15s)
+// Live IST clock display updater (client-side UI clock only)
 setInterval(() => {
   const clockEl = document.getElementById('istClockText');
   const dateEl = document.getElementById('istDateText');
@@ -226,34 +289,37 @@ setInterval(() => {
   if (dateEl) dateEl.textContent = formatIstDate();
 }, 15000);
 
-// 60-second smart polling (pauses when tab is hidden)
-setInterval(async () => {
+// Credit-friendly focus refresh (only if >= 10 minutes since last fetch, allowing Netlify DB to sleep!)
+document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
+  if (Date.now() - state.lastFetchedMs < 10 * 60 * 1000) return;
   await refreshPublic();
-  if (state.route === '/supervisor' && state.user?.role === 'supervisor') {
+  if (state.route === '/admin' && state.user?.role === 'master_admin') {
+    await refreshMasterAdmin();
+  } else if (state.route === '/supervisor' && (state.user?.role === 'supervisor' || state.user?.role === 'master_admin')) {
     await refreshSupervisor();
   } else if (state.route === '/') {
     render();
   }
-}, 60000);
+});
 
 window.addEventListener('popstate', () => {
   state.route = normalizeRoute(window.location.pathname);
   render();
 });
 
-// Register Service Worker for PWA
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   });
 }
 
-// Initial boot
 (async function init() {
   render();
   await Promise.all([refreshSession(), refreshPublic()]);
-  if (state.route === '/supervisor' && state.user?.role === 'supervisor') {
+  if (state.route === '/admin' && state.user?.role === 'master_admin') {
+    await refreshMasterAdmin();
+  } else if (state.route === '/supervisor' && (state.user?.role === 'supervisor' || state.user?.role === 'master_admin')) {
     await refreshSupervisor();
   } else {
     render();

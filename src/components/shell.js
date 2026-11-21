@@ -7,7 +7,7 @@ export function renderShell({
   subtitle,
   user,
   lastSyncedAt,
-  isSupervisorBadge = false,
+  roleBadgeText = '',
   headerActionsHtml = '',
   contentHtml = '',
 }) {
@@ -21,17 +21,22 @@ export function renderShell({
       ? 'flex flex-col items-center justify-center gap-1 py-2 text-light-primary font-label text-label-sm'
       : 'flex flex-col items-center justify-center gap-1 py-2 text-light-on-surface-variant font-label text-label-sm';
 
-  const supervisorTarget = user?.role === 'supervisor' ? '/supervisor' : '/login?next=/supervisor';
+  const isMaster = user?.role === 'master_admin';
+  const isSupervisor = user?.role === 'supervisor';
+
+  const roleLabel = isMaster ? 'Master Admin' : isSupervisor ? 'Supervisor' : 'Employee';
+  const portalTarget = isMaster ? '/admin' : isSupervisor ? '/supervisor' : '/login';
+  const portalLabel = isMaster ? 'Master Admin' : isSupervisor ? 'Supervisor View' : 'Sign In';
 
   const userFooter = user
     ? `
       <div class="flex items-center gap-3 px-2">
-        <div class="w-9 h-9 rounded-full ${user.role === 'supervisor' ? 'bg-light-primary text-light-on-primary' : 'bg-light-primary-container text-light-on-primary-container'} flex items-center justify-center shrink-0">
+        <div class="w-9 h-9 rounded-full ${isMaster || isSupervisor ? 'bg-light-primary text-light-on-primary' : 'bg-light-primary-container text-light-on-primary-container'} flex items-center justify-center shrink-0">
           <span class="font-label text-label-md">${escapeHtml(getInitials(user.fullName))}</span>
         </div>
         <div class="min-w-0">
           <p class="font-label text-label-md text-light-on-surface truncate">${escapeHtml(user.fullName)}</p>
-          <p class="font-body text-body-sm text-light-on-surface-variant truncate">${user.role === 'supervisor' ? 'Supervisor' : 'Employee'} • ${escapeHtml(user.employeeId)}</p>
+          <p class="font-body text-body-sm text-light-on-surface-variant truncate">${roleLabel} • ${escapeHtml(user.employeeId)}</p>
         </div>
       </div>
       <button type="button" data-action="logout" class="flex items-center gap-2 px-3 py-2 rounded border border-light-outline-variant text-light-on-surface-variant hover:bg-light-surface-container-low transition-colors duration-state-change">
@@ -42,7 +47,7 @@ export function renderShell({
     : `
       <div class="px-2">
         <p class="font-label text-label-md text-light-on-surface">Public View</p>
-        <p class="font-body text-body-sm text-light-on-surface-variant">Sign in to update status</p>
+        <p class="font-body text-body-sm text-light-on-surface-variant">Sign in with assigned ID</p>
       </div>
       <a href="/login" data-link class="flex items-center justify-center gap-2 px-3 py-2 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
         <i data-lucide="log-in" class="w-4 h-4" aria-hidden="true"></i>
@@ -50,7 +55,7 @@ export function renderShell({
       </a>
     `;
 
-  const syncText = lastSyncedAt ? `Synced ${formatIstClock(new Date(lastSyncedAt))}` : 'Syncing...';
+  const syncText = lastSyncedAt ? `Synced ${formatIstClock(new Date(lastSyncedAt))}` : 'Sync';
 
   return `
     <div class="min-h-screen flex bg-light-surface pb-20 md:pb-0">
@@ -72,14 +77,27 @@ export function renderShell({
               <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
               <span class="font-label text-label-lg">Team Dashboard</span>
             </a>
-            <a href="/update" data-link class="${navItemClass('/update')}">
-              <i data-lucide="user-check" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
-              <span class="font-label text-label-lg">Update My Status</span>
-            </a>
-            <a href="${supervisorTarget}" data-link class="${navItemClass('/supervisor')}">
-              <i data-lucide="shield-check" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
-              <span class="font-label text-label-lg">Supervisor View</span>
-            </a>
+            ${
+              !isMaster
+                ? `<a href="/update" data-link class="${navItemClass('/update')}">
+                    <i data-lucide="user-check" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
+                    <span class="font-label text-label-lg">Update My Status</span>
+                  </a>`
+                : ''
+            }
+            ${
+              isMaster
+                ? `<a href="/admin" data-link class="${navItemClass('/admin')}">
+                    <i data-lucide="shield-check" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
+                    <span class="font-label text-label-lg">Master Admin</span>
+                  </a>`
+                : isSupervisor
+                  ? `<a href="/supervisor" data-link class="${navItemClass('/supervisor')}">
+                      <i data-lucide="shield-check" class="w-4 h-4 shrink-0" aria-hidden="true"></i>
+                      <span class="font-label text-label-lg">Supervisor View</span>
+                    </a>`
+                  : ''
+            }
           </nav>
         </div>
 
@@ -99,10 +117,10 @@ export function renderShell({
               <div class="flex items-center gap-2 flex-wrap">
                 <h1 class="font-headline text-headline-md md:text-headline-lg text-light-on-surface truncate">${escapeHtml(title)}</h1>
                 ${
-                  isSupervisorBadge
+                  roleBadgeText
                     ? `<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-light-primary-container text-light-on-primary-container shrink-0">
                         <i data-lucide="lock" class="w-3 h-3" aria-hidden="true"></i>
-                        <span class="font-label text-label-sm">Supervisor Access</span>
+                        <span class="font-label text-label-sm">${escapeHtml(roleBadgeText)}</span>
                       </span>`
                     : ''
                 }
@@ -139,13 +157,13 @@ export function renderShell({
           <i data-lucide="layout-dashboard" class="w-5 h-5" aria-hidden="true"></i>
           <span>Team</span>
         </a>
-        <a href="/update" data-link class="${mobileNavClass('/update')}">
-          <i data-lucide="user-check" class="w-5 h-5" aria-hidden="true"></i>
-          <span>My Status</span>
+        <a href="${isMaster ? '/admin' : '/update'}" data-link class="${mobileNavClass(isMaster ? '/admin' : '/update')}">
+          <i data-lucide="${isMaster ? 'shield-check' : 'user-check'}" class="w-5 h-5" aria-hidden="true"></i>
+          <span>${isMaster ? 'Admin' : 'My Status'}</span>
         </a>
-        <a href="${user ? (user.role === 'supervisor' ? '/supervisor' : '/login') : '/login'}" data-link class="${mobileNavClass(activeRoute === '/supervisor' ? '/supervisor' : '/login')}">
-          <i data-lucide="${user?.role === 'supervisor' ? 'shield-check' : 'log-in'}" class="w-5 h-5" aria-hidden="true"></i>
-          <span>${user?.role === 'supervisor' ? 'Supervisor' : user ? 'Account' : 'Sign In'}</span>
+        <a href="${portalTarget}" data-link class="${mobileNavClass(isMaster ? '/admin' : isSupervisor ? '/supervisor' : '/login')}">
+          <i data-lucide="${user ? (isMaster || isSupervisor ? 'shield-check' : 'user') : 'log-in'}" class="w-5 h-5" aria-hidden="true"></i>
+          <span>${user ? portalLabel.split(' ')[0] : 'Sign In'}</span>
         </a>
       </nav>
     </div>

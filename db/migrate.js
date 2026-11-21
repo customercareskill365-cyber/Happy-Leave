@@ -6,9 +6,13 @@ import pg from 'pg';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const connectionString = process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
+  const connectionString =
+    process.env.NETLIFY_DB_URL ||
+    process.env.DATABASE_URL ||
+    process.env.NETLIFY_DATABASE_URL;
+
   if (!connectionString) {
-    console.error('Missing NETLIFY_DATABASE_URL or DATABASE_URL environment variable.');
+    console.error('Missing NETLIFY_DB_URL or DATABASE_URL environment variable.');
     process.exit(1);
   }
 
@@ -19,10 +23,16 @@ async function main() {
   });
 
   try {
-    const sqlPath = path.join(__dirname, 'migrations', '001_init.sql');
-    const sql = await fs.readFile(sqlPath, 'utf8');
-    await pool.query(sql);
-    console.log('Database migration 001_init.sql applied successfully.');
+    const migrationsDir = path.join(__dirname, 'migrations');
+    const files = (await fs.readdir(migrationsDir))
+      .filter((f) => f.endsWith('.sql') && !f.endsWith('.down.sql'))
+      .sort();
+
+    for (const file of files) {
+      const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
+      await pool.query(sql);
+      console.log(`Applied migration: ${file}`);
+    }
   } finally {
     await pool.end();
   }

@@ -1,8 +1,8 @@
 import { getPool } from './_lib/db.js';
 import { sha256Hex } from './_lib/crypto.js';
-import { clearSessionCookie, getSessionCookie, jsonResponse, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { clearSessionCookie, getSessionCookie, jsonResponse, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -16,4 +16,4 @@ export async function handler(event) {
   }
 
   return jsonResponse(200, { ok: true }, { 'Set-Cookie': clearSessionCookie(event) });
-}
+});

@@ -1,11 +1,11 @@
 import { getPool } from './_lib/db.js';
 import { auditLog, getSessionUser } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 const VALID_STATUSES = new Set(['office', 'wfh', 'leave']);
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -18,7 +18,7 @@ export async function handler(event) {
     return jsonResponse(401, { error: 'Authentication required.' });
   }
   if (user.mustChangePin) {
-    return jsonResponse(403, { error: 'Please change your initial PIN before updating your status.' });
+    return jsonResponse(403, { error: 'Please change your initial password before updating your status.' });
   }
 
   const body = parseJsonBody(event);
@@ -68,4 +68,4 @@ export async function handler(event) {
     status: rows[0].status,
     updatedAt: rows[0].updated_at,
   });
-}
+});

@@ -1,9 +1,9 @@
 import { getPool } from './_lib/db.js';
-import { getSessionUser } from './_lib/auth.js';
+import { getSessionUser, isSupervisorOrAdmin } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
-import { jsonResponse, requireMethod } from './_lib/http.js';
+import { jsonResponse, requireMethod, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET']);
   if (methodErr) return methodErr;
 
@@ -12,8 +12,8 @@ export async function handler(event) {
   if (!user) {
     return jsonResponse(401, { error: 'Authentication required.' });
   }
-  if (user.role !== 'supervisor') {
-    return jsonResponse(403, { error: 'Supervisor access required.' });
+  if (!isSupervisorOrAdmin(user)) {
+    return jsonResponse(403, { error: 'Supervisor or Master Admin access required.' });
   }
 
   const availabilityDate = getIstDateString();
@@ -27,7 +27,7 @@ export async function handler(event) {
      FROM employees e
      LEFT JOIN daily_availability da
        ON da.employee_id = e.id AND da.availability_date = $1
-     WHERE e.is_active = true
+     WHERE e.is_active = true AND e.role IN ('employee', 'supervisor')
      ORDER BY
        CASE COALESCE(da.status, 'not-updated')
          WHEN 'leave' THEN 1
@@ -40,8 +40,20 @@ export async function handler(event) {
     [availabilityDate],
   );
 
-  const counts = { total: rows.length, office: 0, wfh: 0, leave: 0, notUpdated: 0 };
+  const counts = {
+    total: rows.length,
+    activeEmployees: 0,
+    activeSupervisors: 0,
+    office: 0,
+    wfh: 0,
+    leave: 0,
+    notUpdated: 0,
+  };
+
   const employees = rows.map((r) => {
+    if (r.role === 'supervisor') counts.activeSupervisors += 1;
+    else counts.activeEmployees += 1;
+
     if (r.status === 'office') counts.office += 1;
     else if (r.status === 'wfh') counts.wfh += 1;
     else if (r.status === 'leave') counts.leave += 1;
@@ -62,4 +74,4 @@ export async function handler(event) {
     counts,
     employees,
   });
-}
+});

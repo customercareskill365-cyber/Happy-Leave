@@ -2,6 +2,7 @@ import { api } from '../lib/api.js';
 import { escapeHtml } from '../lib/escape.js';
 import { formatIstTimestamp } from '../lib/ist.js';
 import { renderIcons } from '../lib/icons.js';
+import { renderAccountModal, renderOneTimePasswordModal } from './masterAdmin.js';
 
 const BADGE_MAP = {
   office: { label: 'Office', badge: 'bg-available-container text-on-available-container', dot: 'bg-available', row: 'hover:bg-light-surface-container-low/60' },
@@ -10,10 +11,42 @@ const BADGE_MAP = {
   'not-updated': { label: 'Not Updated', badge: 'bg-light-surface-container text-light-on-surface-variant', dot: 'bg-light-outline', row: 'bg-light-surface-container-low/40 hover:bg-light-surface-container-low' },
 };
 
-export function renderSupervisorView(state) {
-  const { user, supTab = 'availability', supData, supEmployees, supLoading, supError, supFilter = 'all', supSearch = '', empSearch = '', empStatusFilter = 'active', supModal, supNotice } = state;
+function formatDateTimeIst(iso) {
+  if (!iso) return 'Never';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return (
+    new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }).format(d) + ' IST'
+  );
+}
 
-  if (!user || user.role !== 'supervisor') {
+export function renderSupervisorView(state) {
+  const {
+    user,
+    supTab = 'availability',
+    supData,
+    supEmployees,
+    supAuditLogs = [],
+    supLoading,
+    supError,
+    supFilter = 'all',
+    supSearch = '',
+    empSearch = '',
+    empStatusFilter = 'active',
+    supModal,
+    oneTimePasswordModal,
+    supNotice,
+  } = state;
+
+  if (!user || (user.role !== 'supervisor' && user.role !== 'master_admin')) {
     return `
       <div class="max-w-xl mx-auto w-full bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-6 md:p-8 shadow-sm flex flex-col items-center text-center gap-4">
         <div class="w-12 h-12 rounded-full bg-light-primary-container text-light-on-primary-container flex items-center justify-center">
@@ -21,11 +54,11 @@ export function renderSupervisorView(state) {
         </div>
         <div>
           <h2 class="font-headline text-headline-md text-light-on-surface">Supervisor Access Required</h2>
-          <p class="font-body text-body-md text-light-on-surface-variant mt-1">Only authenticated supervisors can view confidential leave reasons and manage team accounts.</p>
+          <p class="font-body text-body-md text-light-on-surface-variant mt-1">Only authenticated supervisors can view confidential leave reasons and manage employee accounts.</p>
         </div>
         <a href="/login?next=/supervisor" data-link class="inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[48px] rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
           <i data-lucide="shield-check" class="w-4 h-4" aria-hidden="true"></i>
-          <span class="font-label text-label-lg">Sign In as Supervisor</span>
+          <span class="font-label text-label-lg">Sign In</span>
         </a>
       </div>
     `;
@@ -82,12 +115,11 @@ export function renderSupervisorView(state) {
     });
 
     tabBody = `
-      <!-- Team Availability Overview (5 Summary Cards) -->
       <section aria-label="Team Availability Overview" class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-5 md:p-6 shadow-sm flex flex-col gap-5">
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 class="font-headline text-headline-md text-light-on-surface">Team Availability Overview</h2>
-            <p class="font-body text-body-sm text-light-on-surface-variant">Daily status across ${counts.total} active employees • Resets 12:00 AM IST</p>
+            <p class="font-body text-body-sm text-light-on-surface-variant">Daily status across ${counts.total} active team members • Resets 12:00 AM IST</p>
           </div>
           <button type="button" id="exportCsvBtn" class="inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-11 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change shrink-0">
             <i data-lucide="download" class="w-4 h-4" aria-hidden="true"></i>
@@ -97,51 +129,33 @@ export function renderSupervisorView(state) {
 
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 items-stretch">
           <div class="col-span-2 sm:col-span-1 p-4 rounded bg-light-surface-container-low border border-light-outline-variant flex items-center justify-between gap-2">
-            <div>
-              <p class="font-label text-label-sm text-light-on-surface-variant">Total Active</p>
-              <p class="font-headline text-display-lg-mobile md:text-display-lg text-light-on-surface tabular-nums">${counts.total}</p>
-            </div>
-            <i data-lucide="users" class="w-5 h-5 text-light-primary shrink-0" aria-hidden="true"></i>
+            <div><p class="font-label text-label-sm text-light-on-surface-variant">Total Active</p><p class="font-headline text-display-lg-mobile md:text-display-lg text-light-on-surface tabular-nums">${counts.total}</p></div>
+            <i data-lucide="users" class="w-5 h-5 text-light-primary shrink-0"></i>
           </div>
           <div class="p-4 rounded bg-available-container/40 border border-available/30 flex items-center justify-between gap-2">
-            <div>
-              <p class="font-label text-label-sm text-on-available-container">Office</p>
-              <p class="font-headline text-display-lg-mobile md:text-display-lg text-available tabular-nums">${counts.office}</p>
-            </div>
-            <i data-lucide="building-2" class="w-5 h-5 text-available shrink-0" aria-hidden="true"></i>
+            <div><p class="font-label text-label-sm text-on-available-container">Office</p><p class="font-headline text-display-lg-mobile md:text-display-lg text-available tabular-nums">${counts.office}</p></div>
+            <i data-lucide="building-2" class="w-5 h-5 text-available shrink-0"></i>
           </div>
           <div class="p-4 rounded bg-light-tertiary-container/60 border border-light-tertiary/30 flex items-center justify-between gap-2">
-            <div>
-              <p class="font-label text-label-sm text-light-on-tertiary-container">WFH</p>
-              <p class="font-headline text-display-lg-mobile md:text-display-lg text-light-tertiary tabular-nums">${counts.wfh}</p>
-            </div>
-            <i data-lucide="laptop" class="w-5 h-5 text-light-tertiary shrink-0" aria-hidden="true"></i>
+            <div><p class="font-label text-label-sm text-light-on-tertiary-container">WFH</p><p class="font-headline text-display-lg-mobile md:text-display-lg text-light-tertiary tabular-nums">${counts.wfh}</p></div>
+            <i data-lucide="laptop" class="w-5 h-5 text-light-tertiary shrink-0"></i>
           </div>
           <div class="p-4 rounded bg-leave-container/40 border border-leave/30 flex items-center justify-between gap-2">
-            <div>
-              <p class="font-label text-label-sm text-on-leave-container">On Leave</p>
-              <p class="font-headline text-display-lg-mobile md:text-display-lg text-leave tabular-nums">${counts.leave}</p>
-            </div>
-            <i data-lucide="user-x" class="w-5 h-5 text-leave shrink-0" aria-hidden="true"></i>
+            <div><p class="font-label text-label-sm text-on-leave-container">On Leave</p><p class="font-headline text-display-lg-mobile md:text-display-lg text-leave tabular-nums">${counts.leave}</p></div>
+            <i data-lucide="user-x" class="w-5 h-5 text-leave shrink-0"></i>
           </div>
           <div class="p-4 rounded bg-light-surface-container border border-light-outline-variant flex items-center justify-between gap-2">
-            <div>
-              <p class="font-label text-label-sm text-light-on-surface-variant">Not Updated</p>
-              <p class="font-headline text-display-lg-mobile md:text-display-lg text-light-on-surface-variant tabular-nums">${counts.notUpdated}</p>
-            </div>
-            <i data-lucide="clock" class="w-5 h-5 text-light-on-surface-variant shrink-0" aria-hidden="true"></i>
+            <div><p class="font-label text-label-sm text-light-on-surface-variant">Not Updated</p><p class="font-headline text-display-lg-mobile md:text-display-lg text-light-on-surface-variant tabular-nums">${counts.notUpdated}</p></div>
+            <i data-lucide="clock" class="w-5 h-5 text-light-on-surface-variant shrink-0"></i>
           </div>
         </div>
       </section>
 
-      <!-- Filters + Daily Report Table -->
       <section aria-label="Daily Availability Report" class="flex flex-col gap-4">
         <div class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
           <div class="w-full sm:w-72 relative flex items-center">
-            <span aria-hidden="true" class="absolute left-3.5 text-light-on-surface-variant pointer-events-none">
-              <i data-lucide="search" class="w-4 h-4"></i>
-            </span>
-            <input id="supSearchInput" type="search" value="${escapeHtml(supSearch)}" placeholder="Search name or ID..." class="w-full pl-10 pr-3.5 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface text-light-on-surface font-body text-body-md focus:border-light-primary focus:ring-2 focus:ring-light-primary/20 focus:outline-none">
+            <i data-lucide="search" class="w-4 h-4 absolute left-3.5 text-light-on-surface-variant"></i>
+            <input id="supSearchInput" type="search" value="${escapeHtml(supSearch)}" placeholder="Search name or ID..." class="w-full pl-10 pr-3.5 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
           </div>
           <div class="flex flex-wrap items-center gap-2">
             ${filterBtn('all', 'All', counts.total)}
@@ -156,10 +170,10 @@ export function renderSupervisorView(state) {
           <table class="w-full text-left border-collapse">
             <thead class="bg-light-surface-container-low border-b border-light-outline-variant">
               <tr>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Employee</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Status</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Leave Reason (Supervisor Only)</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant text-right">Last Updated</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Employee</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Status</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Leave Reason (Supervisor Only)</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant text-right">Last Updated</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-light-outline-variant">
@@ -170,25 +184,19 @@ export function renderSupervisorView(state) {
                         const cfg = BADGE_MAP[row.status] || BADGE_MAP['not-updated'];
                         const isLeave = row.status === 'leave';
                         return `
-                          <tr class="${cfg.row} transition-colors duration-state-change">
+                          <tr class="${cfg.row}">
                             <td class="px-5 py-3.5">
-                              <div class="flex flex-col">
-                                <span class="font-body text-body-md text-light-on-surface">${escapeHtml(row.fullName)}</span>
-                                <span class="font-mono text-mono-sm text-light-on-surface-variant">${escapeHtml(row.employeeId)}</span>
-                              </div>
+                              <div class="font-body text-body-md text-light-on-surface">${escapeHtml(row.fullName)}</div>
+                              <div class="font-mono text-mono-sm text-light-on-surface-variant">${escapeHtml(row.employeeId)}</div>
                             </td>
                             <td class="px-5 py-3.5">
                               <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ${cfg.badge}">
-                                <span class="w-2 h-2 rounded-full ${cfg.dot}" aria-hidden="true"></span>
+                                <span class="w-2 h-2 rounded-full ${cfg.dot}"></span>
                                 <span class="font-label text-label-sm">${cfg.label}</span>
                               </span>
                             </td>
-                            <td class="px-5 py-3.5">
-                              <span class="font-body text-body-md ${isLeave ? 'text-on-leave-container font-medium' : 'text-light-on-surface-variant'}">${isLeave && row.leaveReason ? escapeHtml(row.leaveReason) : '—'}</span>
-                            </td>
-                            <td class="px-5 py-3.5 text-right">
-                              <span class="font-mono text-mono-sm text-light-on-surface-variant tabular-nums">${row.updatedAt ? escapeHtml(formatIstTimestamp(row.updatedAt)) : '—'}</span>
-                            </td>
+                            <td class="px-5 py-3.5 font-body text-body-md ${isLeave ? 'text-on-leave-container font-medium' : 'text-light-on-surface-variant'}">${isLeave && row.leaveReason ? escapeHtml(row.leaveReason) : '—'}</td>
+                            <td class="px-5 py-3.5 text-right font-mono text-mono-sm text-light-on-surface-variant">${row.updatedAt ? escapeHtml(formatIstTimestamp(row.updatedAt)) : '—'}</td>
                           </tr>
                         `;
                       })
@@ -200,8 +208,7 @@ export function renderSupervisorView(state) {
         </div>
       </section>
     `;
-  } else {
-    // Employee Management Tab
+  } else if (supTab === 'employees') {
     const list = supEmployees || [];
     const q = empSearch.trim().toLowerCase();
     const filteredList = list.filter((e) => {
@@ -215,20 +222,18 @@ export function renderSupervisorView(state) {
         <div class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 class="font-headline text-headline-md text-light-on-surface">Employee Management</h2>
-            <p class="font-body text-body-sm text-light-on-surface-variant">Add, edit, reset PINs, deactivate, or reactivate team accounts. Records are never permanently deleted.</p>
+            <p class="font-body text-body-sm text-light-on-surface-variant">Create, edit, reset passwords, deactivate or reactivate employee accounts.</p>
           </div>
-          <button type="button" data-open-modal="add" class="inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-11 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
-            <i data-lucide="user-plus" class="w-4 h-4" aria-hidden="true"></i>
+          <button type="button" data-open-sup-modal="add-employee" class="inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-11 rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
+            <i data-lucide="user-plus" class="w-4 h-4"></i>
             <span class="font-label text-label-lg">Add Employee</span>
           </button>
         </div>
 
         <div class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
           <div class="w-full sm:w-72 relative flex items-center">
-            <span aria-hidden="true" class="absolute left-3.5 text-light-on-surface-variant pointer-events-none">
-              <i data-lucide="search" class="w-4 h-4"></i>
-            </span>
-            <input id="empSearchInput" type="search" value="${escapeHtml(empSearch)}" placeholder="Search employee..." class="w-full pl-10 pr-3.5 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface text-light-on-surface font-body text-body-md focus:border-light-primary focus:ring-2 focus:ring-light-primary/20 focus:outline-none">
+            <i data-lucide="search" class="w-4 h-4 absolute left-3.5 text-light-on-surface-variant"></i>
+            <input id="empSearchInput" type="search" value="${escapeHtml(empSearch)}" placeholder="Search employee..." class="w-full pl-10 pr-3.5 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
           </div>
           <div class="flex items-center gap-2">
             ${['active', 'inactive', 'all']
@@ -245,11 +250,11 @@ export function renderSupervisorView(state) {
           <table class="w-full text-left border-collapse">
             <thead class="bg-light-surface-container-low border-b border-light-outline-variant">
               <tr>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Employee</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Role</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Account</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">PIN State</th>
-                <th scope="col" class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant text-right">Actions</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Employee</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Account</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Password State</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant">Last Login</th>
+                <th class="px-5 py-3.5 font-label text-label-md text-light-on-surface-variant text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-light-outline-variant">
@@ -258,15 +263,10 @@ export function renderSupervisorView(state) {
                   ? filteredList
                       .map(
                         (emp) => `
-                        <tr class="hover:bg-light-surface-container-low/60 transition-colors duration-state-change">
+                        <tr class="hover:bg-light-surface-container-low/60">
                           <td class="px-5 py-3.5">
-                            <div class="flex flex-col">
-                              <span class="font-body text-body-md text-light-on-surface">${escapeHtml(emp.fullName)}</span>
-                              <span class="font-mono text-mono-sm text-light-on-surface-variant">${escapeHtml(emp.employeeId)}</span>
-                            </div>
-                          </td>
-                          <td class="px-5 py-3.5">
-                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-label text-label-sm ${emp.role === 'supervisor' ? 'bg-light-primary-container text-light-on-primary-container' : 'bg-light-surface-container text-light-on-surface-variant'}">${emp.role === 'supervisor' ? 'Supervisor' : 'Employee'}</span>
+                            <div class="font-body text-body-md text-light-on-surface">${escapeHtml(emp.fullName)}</div>
+                            <div class="font-mono text-mono-sm text-light-on-surface-variant">${escapeHtml(emp.employeeId)}</div>
                           </td>
                           <td class="px-5 py-3.5">
                             <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-label text-label-sm ${emp.isActive ? 'bg-available-container text-on-available-container' : 'bg-leave-container text-on-leave-container'}">
@@ -274,17 +274,16 @@ export function renderSupervisorView(state) {
                               ${emp.isActive ? 'Active' : 'Deactivated'}
                             </span>
                           </td>
-                          <td class="px-5 py-3.5">
-                            <span class="font-body text-body-sm ${emp.mustChangePin ? 'text-warning font-semibold' : 'text-light-on-surface-variant'}">${emp.mustChangePin ? 'Pending PIN Change' : 'Verified'}</span>
-                          </td>
+                          <td class="px-5 py-3.5 font-body text-body-sm ${emp.mustChangePin ? 'text-warning font-semibold' : 'text-light-on-surface-variant'}">${emp.mustChangePin ? 'Pending Password Change' : 'Verified'}</td>
+                          <td class="px-5 py-3.5 font-mono text-mono-sm text-light-on-surface-variant">${escapeHtml(formatDateTimeIst(emp.lastLoginAt))}</td>
                           <td class="px-5 py-3.5 text-right">
                             <div class="inline-flex items-center justify-end gap-2 flex-wrap">
-                              <button type="button" data-open-modal="edit" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-light-outline-variant text-light-on-surface hover:bg-light-surface-container-low font-label text-label-sm">Edit</button>
-                              <button type="button" data-open-modal="reset-pin" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-light-outline-variant text-light-on-surface hover:bg-light-surface-container-low font-label text-label-sm">Reset PIN</button>
+                              <button type="button" data-open-sup-modal="edit-account" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-light-outline-variant font-label text-label-sm hover:bg-light-surface-container-low">Edit</button>
+                              <button type="button" data-open-sup-modal="reset-password" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-light-outline-variant font-label text-label-sm hover:bg-light-surface-container-low">Reset Password</button>
                               ${
                                 emp.isActive
-                                  ? `<button type="button" data-open-modal="deactivate" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-leave/40 text-leave hover:bg-leave-container/30 font-label text-label-sm">Deactivate</button>`
-                                  : `<button type="button" data-open-modal="reactivate" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-available/40 text-available hover:bg-available-container/30 font-label text-label-sm">Reactivate</button>`
+                                  ? `<button type="button" data-open-sup-modal="deactivate" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-leave/40 text-leave font-label text-label-sm hover:bg-leave-container/30">Deactivate</button>`
+                                  : `<button type="button" data-open-sup-modal="reactivate" data-emp-id="${escapeHtml(emp.id)}" class="px-2.5 py-1.5 rounded border border-available/40 text-available font-label text-label-sm hover:bg-available-container/30">Reactivate</button>`
                               }
                             </div>
                           </td>
@@ -292,7 +291,46 @@ export function renderSupervisorView(state) {
                       `,
                       )
                       .join('')
-                  : `<tr><td colspan="5" class="px-5 py-8 text-center font-body text-body-md text-light-on-surface-variant">No accounts match this filter.</td></tr>`
+                  : `<tr><td colspan="5" class="px-5 py-8 text-center font-body text-body-md text-light-on-surface-variant">No employee accounts match this filter.</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  } else if (supTab === 'audit') {
+    tabBody = `
+      <section class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md shadow-sm overflow-hidden">
+        <div class="p-5 border-b border-light-outline-variant">
+          <h2 class="font-headline text-headline-md text-light-on-surface">Employee Activity Logs</h2>
+          <p class="font-body text-body-sm text-light-on-surface-variant">Recent employee account and availability events.</p>
+        </div>
+        <div class="w-full overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead class="bg-light-surface-container-low border-b border-light-outline-variant">
+              <tr>
+                <th class="px-5 py-3 font-label text-label-md text-light-on-surface-variant">Timestamp (IST)</th>
+                <th class="px-5 py-3 font-label text-label-md text-light-on-surface-variant">Actor</th>
+                <th class="px-5 py-3 font-label text-label-md text-light-on-surface-variant">Action</th>
+                <th class="px-5 py-3 font-label text-label-md text-light-on-surface-variant">Target</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-light-outline-variant">
+              ${
+                supAuditLogs.length > 0
+                  ? supAuditLogs
+                      .map(
+                        (log) => `
+                        <tr class="hover:bg-light-surface-container-low/50">
+                          <td class="px-5 py-3 font-mono text-mono-sm text-light-on-surface-variant whitespace-nowrap">${escapeHtml(formatDateTimeIst(log.createdAt))}</td>
+                          <td class="px-5 py-3 font-body text-body-sm text-light-on-surface">${log.actorId ? `${escapeHtml(log.actorName)} (${escapeHtml(log.actorId)})` : 'System'}</td>
+                          <td class="px-5 py-3"><span class="px-2.5 py-0.5 rounded-full bg-light-surface-container font-mono text-mono-sm">${escapeHtml(log.action)}</span></td>
+                          <td class="px-5 py-3 font-body text-body-sm text-light-on-surface">${log.targetId ? `${escapeHtml(log.targetName)} (${escapeHtml(log.targetId)})` : '—'}</td>
+                        </tr>
+                      `,
+                      )
+                      .join('')
+                  : `<tr><td colspan="4" class="px-5 py-8 text-center font-body text-body-md text-light-on-surface-variant">No activity logs yet.</td></tr>`
               }
             </tbody>
           </table>
@@ -305,138 +343,24 @@ export function renderSupervisorView(state) {
     <div class="flex flex-col gap-5">
       <div class="flex flex-wrap items-center gap-2">
         <button type="button" data-sup-tab="availability" class="${subTabClass(supTab === 'availability')}">
-          <i data-lucide="clipboard-list" class="w-4 h-4" aria-hidden="true"></i>
+          <i data-lucide="clipboard-list" class="w-4 h-4"></i>
           <span>Daily Availability</span>
         </button>
         <button type="button" data-sup-tab="employees" class="${subTabClass(supTab === 'employees')}">
-          <i data-lucide="users-cog" class="w-4 h-4" aria-hidden="true"></i>
+          <i data-lucide="users" class="w-4 h-4"></i>
           <span>Employee Management</span>
+        </button>
+        <button type="button" data-sup-tab="audit" class="${subTabClass(supTab === 'audit')}">
+          <i data-lucide="file-text" class="w-4 h-4"></i>
+          <span>Activity Logs</span>
         </button>
       </div>
 
       ${noticeHtml}
       ${errorHtml}
       ${tabBody}
-      ${supModal ? renderSupervisorModal(supModal, supEmployees || []) : ''}
-    </div>
-  `;
-}
-
-function renderSupervisorModal(modal, employees) {
-  const emp = modal.empId ? employees.find((e) => e.id === modal.empId) : null;
-
-  let title = '';
-  let body = '';
-
-  if (modal.type === 'add') {
-    title = 'Add New Employee';
-    body = `
-      <form id="supModalForm" class="flex flex-col gap-4">
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Full Name</span>
-          <input name="fullName" type="text" required placeholder="e.g. Priya Sharma" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
-        </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Unique Employee ID</span>
-          <input name="employeeId" type="text" required placeholder="e.g. EMP-113" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-md uppercase">
-        </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Initial Temporary PIN (4–12 chars/digits)</span>
-          <input name="initialPin" type="password" inputmode="numeric" minlength="4" maxlength="12" required placeholder="Employee must change on first login" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-md">
-        </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Role</span>
-          <select name="role" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
-            <option value="employee" selected>Employee</option>
-            <option value="supervisor">Supervisor</option>
-          </select>
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" data-close-modal class="px-4 py-2 rounded border border-light-outline-variant font-label text-label-md">Cancel</button>
-          <button type="submit" class="px-4 py-2 rounded bg-light-primary text-light-on-primary font-label text-label-md">Create Account</button>
-        </div>
-      </form>
-    `;
-  } else if (modal.type === 'edit' && emp) {
-    title = `Edit ${emp.fullName}`;
-    body = `
-      <form id="supModalForm" class="flex flex-col gap-4">
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Full Name</span>
-          <input name="fullName" type="text" required value="${escapeHtml(emp.fullName)}" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
-        </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Employee ID</span>
-          <input name="employeeId" type="text" required value="${escapeHtml(emp.employeeId)}" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-md uppercase">
-        </label>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Role</span>
-          <select name="role" class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-body text-body-md">
-            <option value="employee" ${emp.role === 'employee' ? 'selected' : ''}>Employee</option>
-            <option value="supervisor" ${emp.role === 'supervisor' ? 'selected' : ''}>Supervisor</option>
-          </select>
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" data-close-modal class="px-4 py-2 rounded border border-light-outline-variant font-label text-label-md">Cancel</button>
-          <button type="submit" class="px-4 py-2 rounded bg-light-primary text-light-on-primary font-label text-label-md">Save Changes</button>
-        </div>
-      </form>
-    `;
-  } else if (modal.type === 'reset-pin' && emp) {
-    title = `Reset PIN — ${emp.fullName}`;
-    body = `
-      <form id="supModalForm" class="flex flex-col gap-4">
-        <p class="font-body text-body-sm text-light-on-surface-variant">Setting a temporary PIN will require ${escapeHtml(emp.fullName)} to change it on their next login and will revoke active sessions.</p>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">New Temporary PIN (4–12 chars/digits)</span>
-          <input name="newPin" type="password" inputmode="numeric" minlength="4" maxlength="12" required class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-md">
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" data-close-modal class="px-4 py-2 rounded border border-light-outline-variant font-label text-label-md">Cancel</button>
-          <button type="submit" class="px-4 py-2 rounded bg-light-primary text-light-on-primary font-label text-label-md">Reset PIN</button>
-        </div>
-      </form>
-    `;
-  } else if (modal.type === 'deactivate' && emp) {
-    title = `Deactivate ${emp.fullName}?`;
-    body = `
-      <form id="supModalForm" class="flex flex-col gap-4">
-        <p class="font-body text-body-md text-light-on-surface-variant">Deactivating <strong>${escapeHtml(emp.employeeId)}</strong> will immediately revoke login access and active sessions, and remove them from the active public dashboard. Historical records will be preserved.</p>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" data-close-modal class="px-4 py-2 rounded border border-light-outline-variant font-label text-label-md">Cancel</button>
-          <button type="submit" class="px-4 py-2 rounded bg-leave text-on-leave font-label text-label-md">Confirm Deactivation</button>
-        </div>
-      </form>
-    `;
-  } else if (modal.type === 'reactivate' && emp) {
-    title = `Reactivate ${emp.fullName}`;
-    body = `
-      <form id="supModalForm" class="flex flex-col gap-4">
-        <p class="font-body text-body-sm text-light-on-surface-variant">Provide a fresh temporary PIN so ${escapeHtml(emp.fullName)} can verify and set a new personal PIN on login.</p>
-        <label class="flex flex-col gap-1.5">
-          <span class="font-label text-label-md text-light-on-surface">Temporary PIN (4–12 chars/digits)</span>
-          <input name="newPin" type="password" inputmode="numeric" minlength="4" maxlength="12" required class="px-3.5 py-2.5 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-md">
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" data-close-modal class="px-4 py-2 rounded border border-light-outline-variant font-label text-label-md">Cancel</button>
-          <button type="submit" class="px-4 py-2 rounded bg-available text-on-available font-label text-label-md">Reactivate Account</button>
-        </div>
-      </form>
-    `;
-  }
-
-  return `
-    <div class="fixed inset-0 z-50 bg-light-scrim/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md shadow-lg w-full max-w-md p-6 flex flex-col gap-4">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="font-headline text-headline-md text-light-on-surface">${escapeHtml(title)}</h3>
-          <button type="button" data-close-modal class="p-1 text-light-on-surface-variant hover:text-light-on-surface" aria-label="Close">
-            <i data-lucide="x" class="w-5 h-5"></i>
-          </button>
-        </div>
-        ${modal.error ? `<div role="alert" class="p-3 rounded bg-error-container text-light-on-error-container font-body text-body-sm">${escapeHtml(modal.error)}</div>` : ''}
-        ${body}
-      </div>
+      ${supModal ? renderAccountModal(supModal, supEmployees || [], false) : ''}
+      ${oneTimePasswordModal ? renderOneTimePasswordModal(oneTimePasswordModal) : ''}
     </div>
   `;
 }
@@ -496,13 +420,7 @@ export function bindSupervisorEvents(root, state, { refreshSupervisor, refreshPu
       const lines = [
         ['Employee ID', 'Full Name', 'Status', 'Leave Reason', 'Last Updated (IST)'].map(csvCell).join(','),
         ...rows.map((r) =>
-          [
-            r.employeeId,
-            r.fullName,
-            r.status,
-            r.status === 'leave' ? r.leaveReason || '' : '',
-            r.updatedAt ? formatIstTimestamp(r.updatedAt) : '',
-          ]
+          [r.employeeId, r.fullName, r.status, r.status === 'leave' ? r.leaveReason || '' : '', r.updatedAt ? formatIstTimestamp(r.updatedAt) : '']
             .map(csvCell)
             .join(','),
         ),
@@ -519,9 +437,9 @@ export function bindSupervisorEvents(root, state, { refreshSupervisor, refreshPu
     });
   }
 
-  root.querySelectorAll('[data-open-modal]').forEach((btn) => {
+  root.querySelectorAll('[data-open-sup-modal]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      state.supModal = { type: btn.dataset.openModal, empId: btn.dataset.empId || null, error: '' };
+      state.supModal = { type: btn.dataset.openSupModal, empId: btn.dataset.empId || null, error: '' };
       onStateChange();
     });
   });
@@ -533,7 +451,24 @@ export function bindSupervisorEvents(root, state, { refreshSupervisor, refreshPu
     });
   });
 
-  const modalForm = root.querySelector('#supModalForm');
+  const autoChk = root.querySelector('#autoGenPwdChk');
+  const manualGroup = root.querySelector('#manualPwdGroup');
+  const manualInput = root.querySelector('#manualPwdInput');
+  if (autoChk && manualGroup) {
+    autoChk.addEventListener('change', () => {
+      if (autoChk.checked) {
+        manualGroup.classList.add('hidden');
+        manualGroup.classList.remove('flex');
+        if (manualInput) manualInput.required = false;
+      } else {
+        manualGroup.classList.remove('hidden');
+        manualGroup.classList.add('flex');
+        if (manualInput) manualInput.required = true;
+      }
+    });
+  }
+
+  const modalForm = root.querySelector('#accountModalForm');
   if (modalForm && state.supModal) {
     modalForm.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -542,37 +477,43 @@ export function bindSupervisorEvents(root, state, { refreshSupervisor, refreshPu
       modal.error = '';
 
       try {
-        if (modal.type === 'add') {
-          await api.createEmployee({
+        if (modal.type === 'add-employee') {
+          const gen = Boolean(fd.get('generatePassword'));
+          const empId = fd.get('employeeId').toString().trim().toUpperCase();
+          const res = await api.createAccount({
             fullName: fd.get('fullName').toString().trim(),
-            employeeId: fd.get('employeeId').toString().trim().toUpperCase(),
-            initialPin: fd.get('initialPin').toString(),
-            role: fd.get('role').toString(),
+            employeeId: empId,
+            role: 'employee',
+            generatePassword: gen,
+            initialPassword: gen ? '' : fd.get('initialPassword').toString(),
+            isActive: fd.get('isActive') === 'true',
           });
-          state.supNotice = 'Employee account created.';
-        } else if (modal.type === 'edit') {
-          await api.updateEmployee(modal.empId, {
+          state.supNotice = `Employee ${empId} created.`;
+          if (res.temporaryPassword) {
+            state.oneTimePasswordModal = { employeeId: empId, password: res.temporaryPassword };
+          }
+        } else if (modal.type === 'edit-account') {
+          await api.updateAccount(modal.empId, {
             action: 'edit',
             fullName: fd.get('fullName').toString().trim(),
             employeeId: fd.get('employeeId').toString().trim().toUpperCase(),
-            role: fd.get('role').toString(),
           });
           state.supNotice = 'Employee details updated.';
-        } else if (modal.type === 'reset-pin') {
-          await api.updateEmployee(modal.empId, {
-            action: 'reset_pin',
-            newPin: fd.get('newPin').toString(),
+        } else if (modal.type === 'reset-password' || modal.type === 'reactivate') {
+          const gen = Boolean(fd.get('generatePassword'));
+          const targetAcc = (state.supEmployees || []).find((x) => x.id === modal.empId);
+          const res = await api.updateAccount(modal.empId, {
+            action: modal.type === 'reactivate' ? 'reactivate' : 'reset_password',
+            generatePassword: gen,
+            newPassword: gen ? '' : fd.get('newPassword').toString(),
           });
-          state.supNotice = 'Temporary PIN reset. User must change PIN on next login.';
+          state.supNotice = modal.type === 'reactivate' ? 'Employee reactivated.' : 'Temporary password reset.';
+          if (res.temporaryPassword) {
+            state.oneTimePasswordModal = { employeeId: targetAcc?.employeeId || 'Employee', password: res.temporaryPassword };
+          }
         } else if (modal.type === 'deactivate') {
-          await api.updateEmployee(modal.empId, { action: 'deactivate' });
+          await api.updateAccount(modal.empId, { action: 'deactivate' });
           state.supNotice = 'Employee deactivated and active sessions revoked.';
-        } else if (modal.type === 'reactivate') {
-          await api.updateEmployee(modal.empId, {
-            action: 'reactivate',
-            newPin: fd.get('newPin').toString(),
-          });
-          state.supNotice = 'Employee account reactivated with a temporary PIN.';
         }
         state.supModal = null;
         await Promise.all([refreshSupervisor(), refreshPublic()]);
@@ -581,6 +522,22 @@ export function bindSupervisorEvents(root, state, { refreshSupervisor, refreshPu
         modal.error = err.message || 'Operation failed.';
         onStateChange();
       }
+    });
+  }
+
+  const copyBtn = root.querySelector('#copyOneTimePwdBtn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const val = root.querySelector('#oneTimePwdValue')?.textContent || '';
+      navigator.clipboard?.writeText(val).catch(() => {});
+      copyBtn.textContent = 'Copied';
+    });
+  }
+  const closeOneTimeBtn = root.querySelector('[data-close-one-time-pwd]');
+  if (closeOneTimeBtn) {
+    closeOneTimeBtn.addEventListener('click', () => {
+      state.oneTimePasswordModal = null;
+      onStateChange();
     });
   }
 

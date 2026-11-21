@@ -87,6 +87,10 @@ export async function handler(event) {
     'UPDATE passkey_credentials SET sign_count = $1 WHERE id = $2',
     [verification.authenticationInfo.newCounter, cred.id],
   );
+  await pool.query(
+    'UPDATE employees SET last_login_at = now(), updated_at = now() WHERE id = $1',
+    [emp.id],
+  );
 
   const token = await createSession(pool, emp.id);
   await auditLog(pool, {

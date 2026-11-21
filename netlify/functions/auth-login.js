@@ -1,12 +1,12 @@
 import { getPool } from './_lib/db.js';
 import { verifyPin } from './_lib/crypto.js';
 import { auditLog, createSession, validateEmployeeIdFormat } from './_lib/auth.js';
-import { buildSessionCookie, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { buildSessionCookie, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -17,11 +17,11 @@ export async function handler(event) {
   if (!body) return jsonResponse(400, { error: 'Invalid JSON payload.' });
 
   const rawEmpId = typeof body.employeeId === 'string' ? body.employeeId.trim().toUpperCase() : '';
-  const pin = typeof body.pin === 'string' ? body.pin : '';
+  const secret = typeof body.password === 'string' ? body.password : typeof body.pin === 'string' ? body.pin : '';
 
   const idErr = validateEmployeeIdFormat(rawEmpId);
-  if (idErr || !pin) {
-    return jsonResponse(400, { error: 'Employee ID and PIN are required.' });
+  if (idErr || !secret) {
+    return jsonResponse(400, { error: 'User ID and password are required.' });
   }
 
   const pool = getPool();
@@ -33,7 +33,7 @@ export async function handler(event) {
   );
 
   if (rows.length === 0) {
-    return jsonResponse(401, { error: 'Invalid Employee ID or PIN.' });
+    return jsonResponse(401, { error: 'Invalid User ID or password.' });
   }
 
   const emp = rows[0];
@@ -44,7 +44,7 @@ export async function handler(event) {
       targetId: emp.id,
       metadata: { reason: 'account_deactivated' },
     });
-    return jsonResponse(403, { error: 'This account has been deactivated. Contact a supervisor.' });
+    return jsonResponse(403, { error: 'This account has been deactivated. Contact an administrator.' });
   }
 
   if (emp.locked_until && new Date(emp.locked_until) > new Date()) {
@@ -59,7 +59,7 @@ export async function handler(event) {
     });
   }
 
-  const ok = await verifyPin(pin, emp.pin_hash);
+  const ok = await verifyPin(secret, emp.pin_hash);
   if (!ok) {
     const nextAttempts = (emp.failed_login_attempts || 0) + 1;
     const shouldLock = nextAttempts >= MAX_FAILED_ATTEMPTS;
@@ -85,12 +85,12 @@ export async function handler(event) {
         error: `Too many failed attempts. Account locked for ${LOCKOUT_MINUTES} minutes.`,
       });
     }
-    return jsonResponse(401, { error: 'Invalid Employee ID or PIN.' });
+    return jsonResponse(401, { error: 'Invalid User ID or password.' });
   }
 
   await pool.query(
     `UPDATE employees
-     SET failed_login_attempts = 0, locked_until = NULL, updated_at = now()
+     SET failed_login_attempts = 0, locked_until = NULL, last_login_at = now(), updated_at = now()
      WHERE id = $1`,
     [emp.id],
   );
@@ -100,7 +100,7 @@ export async function handler(event) {
     actorId: emp.id,
     action: 'login_success',
     targetId: emp.id,
-    metadata: { method: 'pin', role: emp.role },
+    metadata: { method: 'password', role: emp.role },
   });
 
   return jsonResponse(
@@ -116,4 +116,4 @@ export async function handler(event) {
     },
     { 'Set-Cookie': buildSessionCookie(token, event) },
   );
-}
+});

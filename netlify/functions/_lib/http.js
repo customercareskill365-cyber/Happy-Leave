@@ -14,6 +14,23 @@ export function jsonResponse(statusCode, body, extraHeaders = {}) {
   };
 }
 
+export function withHandler(fn) {
+  return async (event, context) => {
+    try {
+      return await fn(event, context);
+    } catch (err) {
+      if (err?.name === 'DbUnavailableError') {
+        return jsonResponse(503, { error: err.message });
+      }
+      if (err?.code === 'ECONNREFUSED' || err?.code === 'ENOTFOUND' || err?.code === '28P01') {
+        return jsonResponse(503, { error: 'Database connection unavailable. Check database configuration.' });
+      }
+      console.error('Unhandled function error:', err?.message || err);
+      return jsonResponse(500, { error: 'Internal server error.' });
+    }
+  };
+}
+
 export function parseJsonBody(event) {
   if (!event.body) return {};
   try {

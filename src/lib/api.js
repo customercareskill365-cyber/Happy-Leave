@@ -36,15 +36,15 @@ async function request(path, options = {}) {
 export const api = {
   getPublicAvailability: () => request('/api/availability-public'),
   getSession: () => request('/api/auth-me'),
-  loginPin: (employeeId, pin) =>
+  login: (employeeId, password) =>
     request('/api/auth-login', {
       method: 'POST',
-      body: JSON.stringify({ employeeId, pin }),
+      body: JSON.stringify({ employeeId, password }),
     }),
-  changePin: (currentPin, newPin) =>
+  changePassword: (currentPassword, newPassword) =>
     request('/api/auth-change-pin', {
       method: 'POST',
-      body: JSON.stringify({ currentPin, newPin }),
+      body: JSON.stringify({ currentPassword, newPassword }),
     }),
   logout: () => request('/api/auth-logout', { method: 'POST' }),
 
@@ -73,17 +73,26 @@ export const api = {
       body: JSON.stringify({ status, leaveReason }),
     }),
 
-  // Supervisor endpoints
+  // Supervisor & Master Admin endpoints
   getSupervisorDashboard: () => request('/api/supervisor-availability'),
-  getEmployees: () => request('/api/supervisor-employees'),
-  createEmployee: (payload) =>
+  getAccounts: (role) => request(`/api/supervisor-employees${role ? `?role=${encodeURIComponent(role)}` : ''}`),
+  createAccount: (payload) =>
     request('/api/supervisor-employees', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  updateEmployee: (id, payload) =>
+  updateAccount: (id, payload) =>
     request('/api/supervisor-employees', {
       method: 'PATCH',
       body: JSON.stringify({ id, ...payload }),
+    }),
+  getAuditLogs: (limit = 100) => request(`/api/audit-logs?limit=${limit}`),
+
+  // Master Admin settings
+  getAdminSettings: () => request('/api/admin-settings'),
+  updateAdminSettings: (payload) =>
+    request('/api/admin-settings', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     }),
 };

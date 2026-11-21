@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { generateToken, sha256Hex } from './crypto.js';
 import { getSessionCookie } from './http.js';
 
@@ -20,7 +21,7 @@ export async function getSessionUser(pool, event) {
 
   const tokenHash = sha256Hex(rawToken);
   const { rows } = await pool.query(
-    `SELECT e.id, e.full_name, e.employee_id, e.role, e.is_active, e.must_change_pin
+    `SELECT e.id, e.full_name, e.employee_id, e.role, e.is_active, e.must_change_pin, e.last_login_at
      FROM sessions s
      JOIN employees e ON e.id = s.employee_id
      WHERE s.id = $1 AND s.expires_at > now() AND e.is_active = true`,
@@ -35,6 +36,7 @@ export async function getSessionUser(pool, event) {
     role: row.role,
     isActive: row.is_active,
     mustChangePin: row.must_change_pin,
+    lastLoginAt: row.last_login_at,
     sessionHash: tokenHash,
   };
 }
@@ -51,23 +53,42 @@ export async function auditLog(pool, { actorId = null, action, targetId = null, 
   );
 }
 
-export function validatePinFormat(pin) {
-  if (typeof pin !== 'string') return 'PIN must be a string.';
-  const trimmed = pin.trim();
-  if (trimmed.length < 4 || trimmed.length > 12) {
-    return 'PIN must be between 4 and 12 characters.';
+export function validatePasswordFormat(password) {
+  if (typeof password !== 'string') return 'Password/PIN is required.';
+  const trimmed = password.trim();
+  if (trimmed.length < 4 || trimmed.length > 64) {
+    return 'Password/PIN must be between 4 and 64 characters.';
   }
-  if (!/^[a-zA-Z0-9]+$/.test(trimmed)) {
-    return 'PIN may only contain letters and digits.';
+  if (/\s/.test(trimmed)) {
+    return 'Password/PIN cannot contain spaces.';
   }
   return null;
 }
 
+export const validatePinFormat = validatePasswordFormat;
+
+export function generateTempPassword(length = 10) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$';
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += chars[crypto.randomInt(0, chars.length)];
+  }
+  return out;
+}
+
 export function validateEmployeeIdFormat(empId) {
-  if (typeof empId !== 'string') return 'Employee ID is required.';
+  if (typeof empId !== 'string') return 'User ID is required.';
   const trimmed = empId.trim().toUpperCase();
   if (!/^[A-Z0-9_-]{2,24}$/.test(trimmed)) {
-    return 'Employee ID must be 2–24 characters (letters, digits, hyphen, underscore).';
+    return 'User ID must be 2–24 characters (letters, digits, hyphen, underscore).';
   }
   return null;
+}
+
+export function isMasterAdmin(user) {
+  return user?.role === 'master_admin';
+}
+
+export function isSupervisorOrAdmin(user) {
+  return user?.role === 'supervisor' || user?.role === 'master_admin';
 }

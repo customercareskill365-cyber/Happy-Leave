@@ -1,9 +1,9 @@
 import { getPool } from './_lib/db.js';
 import { hashPin, verifyPin } from './_lib/crypto.js';
-import { auditLog, getSessionUser, validatePinFormat } from './_lib/auth.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { auditLog, getSessionUser, validatePasswordFormat } from './_lib/auth.js';
+import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -19,15 +19,15 @@ export async function handler(event) {
   const body = parseJsonBody(event);
   if (!body) return jsonResponse(400, { error: 'Invalid JSON payload.' });
 
-  const currentPin = typeof body.currentPin === 'string' ? body.currentPin : '';
-  const newPin = typeof body.newPin === 'string' ? body.newPin.trim() : '';
+  const currentSecret = typeof body.currentPassword === 'string' ? body.currentPassword : typeof body.currentPin === 'string' ? body.currentPin : '';
+  const newSecret = typeof body.newPassword === 'string' ? body.newPassword.trim() : typeof body.newPin === 'string' ? body.newPin.trim() : '';
 
-  const pinErr = validatePinFormat(newPin);
-  if (pinErr) {
-    return jsonResponse(400, { error: pinErr });
+  const passErr = validatePasswordFormat(newSecret);
+  if (passErr) {
+    return jsonResponse(400, { error: passErr });
   }
-  if (currentPin === newPin) {
-    return jsonResponse(400, { error: 'New PIN must be different from your current PIN.' });
+  if (currentSecret === newSecret) {
+    return jsonResponse(400, { error: 'New password must be different from your current password.' });
   }
 
   const { rows } = await pool.query('SELECT pin_hash FROM employees WHERE id = $1', [user.id]);
@@ -35,12 +35,12 @@ export async function handler(event) {
     return jsonResponse(404, { error: 'Account not found.' });
   }
 
-  const ok = await verifyPin(currentPin, rows[0].pin_hash);
+  const ok = await verifyPin(currentSecret, rows[0].pin_hash);
   if (!ok) {
-    return jsonResponse(401, { error: 'Current PIN is incorrect.' });
+    return jsonResponse(401, { error: 'Current password is incorrect.' });
   }
 
-  const newHash = await hashPin(newPin);
+  const newHash = await hashPin(newSecret);
   await pool.query(
     `UPDATE employees
      SET pin_hash = $1, must_change_pin = false, updated_at = now()
@@ -50,9 +50,9 @@ export async function handler(event) {
 
   await auditLog(pool, {
     actorId: user.id,
-    action: 'pin_changed',
+    action: 'password_changed',
     targetId: user.id,
   });
 
   return jsonResponse(200, { ok: true });
-}
+});

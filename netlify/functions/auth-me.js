@@ -1,9 +1,9 @@
 import { getPool } from './_lib/db.js';
 import { getSessionUser } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
-import { jsonResponse, requireMethod } from './_lib/http.js';
+import { jsonResponse, requireMethod, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET']);
   if (methodErr) return methodErr;
 
@@ -30,8 +30,9 @@ export async function handler(event) {
       employeeId: user.employeeId,
       role: user.role,
       mustChangePin: user.mustChangePin,
+      lastLoginAt: user.lastLoginAt,
       todayStatus: todayRow ? todayRow.status : 'not-updated',
       todayUpdatedAt: todayRow ? todayRow.updated_at : null,
     },
   });
-}
+});

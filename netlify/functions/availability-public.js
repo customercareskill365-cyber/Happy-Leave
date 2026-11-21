@@ -1,8 +1,8 @@
 import { getPool } from './_lib/db.js';
 import { getIstDateString } from './_lib/ist.js';
-import { jsonResponse, requireMethod } from './_lib/http.js';
+import { jsonResponse, requireMethod, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export const handler = withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET']);
   if (methodErr) return methodErr;
 
@@ -10,6 +10,7 @@ export async function handler(event) {
   const availabilityDate = getIstDateString();
 
   // Strictly select only public fields; never select leave_reason, pin_hash, or credentials.
+  // Exclude master_admin from the public shift roster.
   const { rows } = await pool.query(
     `SELECT e.employee_id,
             e.full_name,
@@ -18,7 +19,7 @@ export async function handler(event) {
      FROM employees e
      LEFT JOIN daily_availability da
        ON da.employee_id = e.id AND da.availability_date = $1
-     WHERE e.is_active = true
+     WHERE e.is_active = true AND e.role IN ('employee', 'supervisor')
      ORDER BY
        CASE COALESCE(da.status, 'not-updated')
          WHEN 'leave' THEN 1
@@ -51,4 +52,4 @@ export async function handler(event) {
     counts,
     employees,
   });
-}
+});
