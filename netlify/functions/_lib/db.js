@@ -105,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_emp ON webauthn_challenges(em
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 `;
 
-function getEnvVar(name) {
+export function getEnvVar(name) {
   try {
     if (typeof globalThis.Netlify !== 'undefined' && globalThis.Netlify?.env?.get) {
       const val = globalThis.Netlify.env.get(name);
@@ -130,6 +130,20 @@ export function resolveConnectionString() {
     getEnvVar('NETLIFY_DATABASE_URL') ||
     ''
   );
+}
+
+export function isIsolatedNonProductionEnv(connectionString = resolveConnectionString()) {
+  const context = (getEnvVar('CONTEXT') || '').toLowerCase();
+  if (context === 'production') {
+    return false;
+  }
+  if (context === 'deploy-preview' || context === 'branch-deploy' || context === 'dev') {
+    return true;
+  }
+  if (connectionString.includes('localhost') || connectionString.includes('127.0.0.1')) {
+    return true;
+  }
+  return getEnvVar('ALLOW_AUTO_SCHEMA_MIGRATION') === 'true';
 }
 
 export function normalizePgConnectionConfig(rawConnectionString) {
@@ -178,6 +192,12 @@ export function getPool() {
 
 export async function ensureSchema(targetPool = getPool()) {
   if (schemaInitializedFor === activeConnectionString) return;
+
+  // Never auto-initialize schema unless non-production database isolation is confirmed
+  if (!isIsolatedNonProductionEnv(activeConnectionString)) {
+    return;
+  }
+
   if (schemaPromise) return schemaPromise;
 
   schemaPromise = (async () => {

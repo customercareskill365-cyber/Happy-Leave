@@ -14,7 +14,7 @@ import {
   requireMethod,
   requireSameOrigin,
 } from '../netlify/functions/_lib/http.js';
-import { normalizePgConnectionConfig } from '../netlify/functions/_lib/db.js';
+import { isIsolatedNonProductionEnv, normalizePgConnectionConfig } from '../netlify/functions/_lib/db.js';
 
 test('crypto: hashPin and verifyPin work with salt and reject wrong password', async () => {
   const hash1 = await hashPin('StrongPass!99');
@@ -72,6 +72,15 @@ test('unit: validators, HTTP helpers, proxy origin checks, and sslmode normaliza
   const remoteCfg = normalizePgConnectionConfig('postgres://user:pass@ep-cool.neon.tech/neondb?sslmode=require');
   assert.equal(remoteCfg.connectionString.includes('sslmode='), false);
   assert.deepEqual(remoteCfg.ssl, { rejectUnauthorized: false });
+
+  // isIsolatedNonProductionEnv blocks production and allows localhost / deploy-preview
+  assert.equal(isIsolatedNonProductionEnv('postgres://localhost:5432/team_leave'), true);
+  assert.equal(isIsolatedNonProductionEnv('postgres://ep-prod.neon.tech/neondb'), false);
+  process.env.CONTEXT = 'deploy-preview';
+  assert.equal(isIsolatedNonProductionEnv('postgres://ep-branch.neon.tech/neondb'), true);
+  process.env.CONTEXT = 'production';
+  assert.equal(isIsolatedNonProductionEnv('postgres://localhost:5432/team_leave'), false);
+  delete process.env.CONTEXT;
 });
 
 const hasDb = Boolean(process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL);
