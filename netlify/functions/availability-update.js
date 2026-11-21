@@ -1,5 +1,5 @@
 import { getPool } from './_lib/db.js';
-import { auditLog, getSessionUser } from './_lib/auth.js';
+import { auditLog, getSessionUser, isMasterAdmin } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
 import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
@@ -16,6 +16,9 @@ export default withHandler(async (event) => {
   const user = await getSessionUser(pool, event);
   if (!user) {
     return jsonResponse(401, { error: 'Authentication required.' });
+  }
+  if (isMasterAdmin(user)) {
+    return jsonResponse(403, { error: 'Master Admin accounts cannot submit daily availability.' });
   }
   if (user.mustChangePin) {
     return jsonResponse(403, { error: 'Please change your initial password before updating your status.' });

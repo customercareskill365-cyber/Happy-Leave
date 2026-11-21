@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { hashPin, verifyPin } from '../netlify/functions/_lib/crypto.js';
+import { hashPin, sha256Hex, verifyPin } from '../netlify/functions/_lib/crypto.js';
 import { getIstDateString } from '../netlify/functions/_lib/ist.js';
 import {
   isValidUuid,
@@ -219,6 +219,7 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.equal((await supEmpHandler(makeEvent('GET'))).statusCode, 401);
   assert.equal((await auditHandler(makeEvent('GET'))).statusCode, 401);
   assert.equal((await settingsHandler(makeEvent('GET'))).statusCode, 401);
+  assert.equal((await updateAvailHandler(makeEvent('POST', { status: 'office' }))).statusCode, 401);
 
   // 2. Master Admin logs in -> forced to change initial password
   const admLogin = await loginHandler(makeEvent('POST', { employeeId: 'ADM-01', password: 'AdminInit!1' }));
@@ -238,6 +239,12 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
     makeEvent('POST', { currentPassword: 'AdminInit!1', newPassword: 'AdminStrong!2026' }, admCookie),
   );
   assert.equal(admPwdChange.statusCode, 200);
+
+  // SEC-LOW-01: Master Admin is explicitly rejected (403) from availability-update
+  assert.equal(
+    (await updateAvailHandler(makeEvent('POST', { status: 'office' }, admCookie))).statusCode,
+    403,
+  );
 
   // Non-UUID targetId in PATCH returns 400 (not 500) (BE-03)
   const badUuidPatch = await supEmpHandler(
@@ -266,6 +273,12 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   const supCookie = extractCookie(supLogin);
   assert.equal(
     (await changePinHandler(makeEvent('POST', { currentPassword: supTempPwd, newPassword: 'SupStrong!2026' }, supCookie))).statusCode,
+    200,
+  );
+
+  // SEC-LOW-01: Supervisor retains permission to update own availability (200)
+  assert.equal(
+    (await updateAvailHandler(makeEvent('POST', { status: 'wfh' }, supCookie))).statusCode,
     200,
   );
 
@@ -353,13 +366,17 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.ok(JSON.parse((await meHandler(makeEvent('GET', null, empCookie))).body).user);
   assert.equal(JSON.parse((await meHandler(makeEvent('GET', null, empCookie2))).body).user, null);
 
-  // QA-NEW-04: Expired session token is rejected by auth-me
+  // QA-MED-01: Expired session token (matching sha256Hex storage format) is rejected
   await pool.query(
     `INSERT INTO sessions (id, employee_id, expires_at)
-     VALUES ('0000000000000000000000000000000000000000000000000000000000000000', $1, now() - interval '1 hour')`,
-    [empUuid],
+     VALUES ($1, $2, now() - interval '1 hour')`,
+    [sha256Hex('expired_token'), empUuid],
   );
   assert.equal(JSON.parse((await meHandler(makeEvent('GET', null, 'tlm_session=expired_token'))).body).user, null);
+  assert.equal(
+    (await updateAvailHandler(makeEvent('POST', { status: 'office' }, 'tlm_session=expired_token'))).statusCode,
+    401,
+  );
 
   // Employee can request passkey registration options once initial password is changed
   const pkOptsOk = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST', null, empCookie));
