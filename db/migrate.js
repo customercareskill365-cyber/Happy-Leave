@@ -14,6 +14,7 @@ async function main() {
     process.exit(1);
   }
 
+  const forceRerun = process.argv.includes('--force');
   const pool = new pg.Pool(normalizePgConnectionConfig(connectionString));
   const client = await pool.connect();
 
@@ -25,12 +26,20 @@ async function main() {
       )
     `);
 
+    const { rows: appliedRows } = await client.query('SELECT filename FROM schema_migrations');
+    const appliedSet = new Set(appliedRows.map((r) => r.filename));
+
     const migrationsDir = path.join(__dirname, 'migrations');
     const files = (await fs.readdir(migrationsDir))
       .filter((f) => f.endsWith('.sql') && !f.endsWith('.down.sql'))
       .sort();
 
     for (const file of files) {
+      if (!forceRerun && appliedSet.has(file)) {
+        console.log(`Skipped already-applied migration: ${file}`);
+        continue;
+      }
+
       const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
       await client.query('BEGIN');
       try {

@@ -6,6 +6,7 @@ import {
   getSessionUser,
   isMasterAdmin,
   isSupervisorOrAdmin,
+  revokeEmployeePasskeysAndChallenges,
   revokeEmployeeSessions,
   validateEmployeeIdFormat,
   validatePasswordFormat,
@@ -229,6 +230,7 @@ export default withHandler(async (event) => {
       [pinHash, target.id],
     );
     await revokeEmployeeSessions(pool, target.id);
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_password_reset' : 'password_reset',
@@ -248,6 +250,7 @@ export default withHandler(async (event) => {
       [target.id],
     );
     await revokeEmployeeSessions(pool, target.id);
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_deactivated' : 'employee_deactivated',
@@ -272,6 +275,7 @@ export default withHandler(async (event) => {
        WHERE id = $2`,
       [pinHash, target.id],
     );
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_reactivated' : 'employee_reactivated',

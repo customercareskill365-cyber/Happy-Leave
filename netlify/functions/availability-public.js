@@ -11,26 +11,29 @@ export default withHandler(async (event) => {
 
   // Strictly select only public fields; never select leave_reason, pin_hash, or credentials.
   // Exclude master_admin from the public shift roster.
-  const { rows } = await pool.query(
-    `SELECT e.employee_id,
-            e.full_name,
-            COALESCE(da.status, 'not-updated') AS status,
-            da.updated_at
-     FROM employees e
-     LEFT JOIN daily_availability da
-       ON da.employee_id = e.id AND da.availability_date = $1
-     WHERE e.is_active = true AND e.role IN ('employee', 'supervisor')
-     ORDER BY
-       CASE COALESCE(da.status, 'not-updated')
-         WHEN 'leave' THEN 1
-         WHEN 'not-updated' THEN 2
-         WHEN 'office' THEN 3
-         WHEN 'wfh' THEN 4
-         ELSE 5
-       END,
-       e.full_name ASC`,
-    [availabilityDate],
-  );
+  const [{ rows }, { rows: settingsRows }] = await Promise.all([
+    pool.query(
+      `SELECT e.employee_id,
+              e.full_name,
+              COALESCE(da.status, 'not-updated') AS status,
+              da.updated_at
+       FROM employees e
+       LEFT JOIN daily_availability da
+         ON da.employee_id = e.id AND da.availability_date = $1
+       WHERE e.is_active = true AND e.role IN ('employee', 'supervisor')
+       ORDER BY
+         CASE COALESCE(da.status, 'not-updated')
+           WHEN 'leave' THEN 1
+           WHEN 'not-updated' THEN 2
+           WHEN 'office' THEN 3
+           WHEN 'wfh' THEN 4
+           ELSE 5
+         END,
+         e.full_name ASC`,
+      [availabilityDate],
+    ),
+    pool.query("SELECT value FROM app_settings WHERE key = 'system'"),
+  ]);
 
   const counts = { total: rows.length, office: 0, wfh: 0, leave: 0, notUpdated: 0 };
   const employees = rows.map((r) => {
@@ -47,9 +50,15 @@ export default withHandler(async (event) => {
     };
   });
 
+  const sysVal = settingsRows[0]?.value || {};
+
   return jsonResponse(200, {
     availabilityDate,
     counts,
     employees,
+    settings: {
+      allowPasskeys: sysVal.allowPasskeys !== false,
+      appTitle: sysVal.appTitle || 'Team Leave Manager',
+    },
   });
 });

@@ -179,6 +179,11 @@ export function getPool() {
     return pool;
   }
 
+  if (pool) {
+    const oldPool = pool;
+    oldPool.end().catch(() => {});
+  }
+
   const cfg = normalizePgConnectionConfig(connectionString);
   pool = new pg.Pool({
     ...cfg,

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tlm-shell-v1';
+const CACHE_NAME = 'tlm-shell-v2';
 const STATIC_SHELL = ['/', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {

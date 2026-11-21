@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { hashPin, verifyPin } from '../netlify/functions/_lib/crypto.js';
 import { getIstDateString } from '../netlify/functions/_lib/ist.js';
 import {
@@ -16,6 +19,8 @@ import {
 } from '../netlify/functions/_lib/http.js';
 import { isIsolatedNonProductionEnv, normalizePgConnectionConfig } from '../netlify/functions/_lib/db.js';
 
+const execFileAsync = promisify(execFile);
+
 test('crypto: hashPin and verifyPin work with salt and reject wrong password', async () => {
   const hash1 = await hashPin('StrongPass!99');
   const hash2 = await hashPin('StrongPass!99');
@@ -31,7 +36,7 @@ test('ist: getIstDateString rolls over at midnight IST (18:30 UTC)', () => {
   assert.equal(getIstDateString(afterMidnightIst), '2026-11-21');
 });
 
-test('unit: validators, HTTP helpers, proxy origin checks, and sslmode normalization', () => {
+test('unit: validators, HTTP helpers, proxy origin checks, sslmode normalization & migration SQL safety', async () => {
   assert.equal(validateEmployeeIdFormat('EMP-101'), null);
   assert.notEqual(validateEmployeeIdFormat('A'), null);
   assert.equal(validatePasswordFormat('ValidPass123'), null);
@@ -81,6 +86,16 @@ test('unit: validators, HTTP helpers, proxy origin checks, and sslmode normaliza
   process.env.CONTEXT = 'production';
   assert.equal(isIsolatedNonProductionEnv('postgres://localhost:5432/team_leave'), false);
   delete process.env.CONTEXT;
+
+  // Verify DB-NEW-01, DB-NEW-03, REL-NEW-01 file contracts
+  const mig002 = await fs.readFile('db/migrations/002_master_admin.sql', 'utf8');
+  assert.equal(mig002.includes('idx_passkey_credentials_emp'), true);
+  const down002 = await fs.readFile('db/migrations/002_master_admin.down.sql', 'utf8');
+  assert.equal(down002.includes('BEGIN;'), true);
+  assert.equal(down002.includes('COMMIT;'), true);
+  assert.equal(down002.includes("DELETE FROM schema_migrations WHERE filename = '002_master_admin.sql'"), true);
+  const swJs = await fs.readFile('public/sw.js', 'utf8');
+  assert.equal(swJs.includes("CACHE_NAME = 'tlm-shell-v2'"), true);
 });
 
 const hasDb = Boolean(process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL);
@@ -103,25 +118,46 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   const { default: passkeyLoginVerify } = await import('../netlify/functions/passkey-login-verify.js');
 
   const pool = getPool();
+
+  // Test DB-NEW-01 & DB-NEW-02: db/migrate.js applies migrations once and skips on repeat run
+  const run1 = await execFileAsync('node', ['db/migrate.js'], { env: process.env });
+  assert.equal(run1.stdout.includes('Applied migration: 001_init.sql'), true);
+  assert.equal(run1.stdout.includes('Applied migration: 002_master_admin.sql'), true);
+
+  const run2 = await execFileAsync('node', ['db/migrate.js'], { env: process.env });
+  assert.equal(run2.stdout.includes('Skipped already-applied migration: 001_init.sql'), true);
+  assert.equal(run2.stdout.includes('Skipped already-applied migration: 002_master_admin.sql'), true);
+
+  const idxCheck = await pool.query("SELECT to_regclass('public.idx_passkey_credentials_emp') AS idx");
+  assert.ok(idxCheck.rows[0]?.idx);
+
   await ensureSchema(pool);
 
-  // Clean slate
+  // Clean slate for test run
   await pool.query('TRUNCATE TABLE audit_logs, sessions, webauthn_challenges, passkey_credentials, daily_availability, employees RESTART IDENTITY CASCADE');
   await pool.query(
     `INSERT INTO app_settings (key, value)
-     VALUES ('system', '{"initialSetupCompleted": true, "allowPasskeys": true, "appTitle": "Team Leave Manager"}'::jsonb)
+     VALUES ('system', '{"initialSetupCompleted": false, "allowPasskeys": true, "appTitle": "Team Leave Manager"}'::jsonb)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
   );
 
-  // Seed 1 Master Admin (simulating provision-admin.js)
-  const adminHash = await hashPin('AdminInit!1');
-  await pool.query(
-    `INSERT INTO employees (full_name, employee_id, role, pin_hash, is_active, must_change_pin)
-     VALUES ('Master Admin', 'ADM-01', 'master_admin', $1, true, true)`,
-    [adminHash],
+  // Test QA-NEW-01: Direct execution of db/provision-admin.js (initial run succeeds, second run refuses)
+  const provEnv = {
+    ...process.env,
+    MASTER_ADMIN_ID: 'ADM-01',
+    MASTER_ADMIN_NAME: 'Master Admin',
+    MASTER_ADMIN_PASSWORD: 'AdminInit!1',
+  };
+  const prov1 = await execFileAsync('node', ['db/provision-admin.js'], { env: provEnv });
+  assert.equal(prov1.stdout.includes('Master Admin ADM-01 provisioned'), true);
+
+  await assert.rejects(
+    execFileAsync('node', ['db/provision-admin.js'], { env: provEnv }),
+    /Master Admin already exists/,
   );
 
   // Enforce unique master_admin constraint at DB level
+  const adminHash = await hashPin('AdminInit!1');
   await assert.rejects(
     pool.query(
       `INSERT INTO employees (full_name, employee_id, role, pin_hash, is_active, must_change_pin)
@@ -155,12 +191,14 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
 
   const extractCookie = (res) => (res.headers?.['Set-Cookie'] || '').split(';')[0];
 
-  // 0. Test Functions v2 Web Request / Response contract across endpoints
+  // 0. Test Functions v2 Web Request / Response contract & SEC-NEW-03 public settings
   const v2PubRes = await publicAvailHandler(makeV2Request('http://localhost:8888/api/availability-public', 'GET'));
   assert.equal(v2PubRes instanceof Response, true);
   assert.equal(v2PubRes.status, 200);
   const v2PubBody = await v2PubRes.json();
   assert.equal(typeof v2PubBody.availabilityDate, 'string');
+  assert.equal(v2PubBody.settings?.allowPasskeys, true);
+  assert.equal(v2PubBody.settings?.appTitle, 'Team Leave Manager');
 
   const v2MeRes = await meHandler(makeV2Request('http://localhost:8888/api/auth-me', 'GET'));
   assert.equal(v2MeRes instanceof Response, true);
@@ -249,7 +287,7 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
     makeEvent('POST', { fullName: 'Ananya Rao', employeeId: 'EMP-101', role: 'employee', generatePassword: true }, supCookie),
   );
   assert.equal(createEmp.statusCode, 201);
-  const empTempPwd = JSON.parse(createEmp.body).temporaryPassword;
+  let empTempPwd = JSON.parse(createEmp.body).temporaryPassword;
   const empUuid = JSON.parse(createEmp.body).employee.id;
 
   // Duplicate User ID rejected -> 409
@@ -271,14 +309,57 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   );
   assert.equal(supPromote.statusCode, 403);
 
-  // 5. Employee EMP-101 logs in, changes initial password, updates status to On Leave
+  // QA-NEW-02 & SEC-NEW-01: Supervisor performs valid edit, reset_password, deactivate, and reactivate on EMP-101
+  // Also insert a dummy passkey credential for EMP-101 and verify reset_password deletes it
+  await pool.query(
+    `INSERT INTO passkey_credentials (employee_id, credential_id, public_key, sign_count)
+     VALUES ($1, 'cred-emp-101', $2, 0)`,
+    [empUuid, Buffer.from([1, 2, 3, 4])],
+  );
+
+  const supEditEmp = await supEmpHandler(
+    makeEvent('PATCH', { id: empUuid, action: 'edit', fullName: 'Ananya Rao Updated', employeeId: 'EMP-101' }, supCookie),
+  );
+  assert.equal(supEditEmp.statusCode, 200);
+
+  const supResetEmp = await supEmpHandler(
+    makeEvent('PATCH', { id: empUuid, action: 'reset_password', generatePassword: true }, supCookie),
+  );
+  assert.equal(supResetEmp.statusCode, 200);
+  const pkCountAfterReset = await pool.query('SELECT count(*) AS cnt FROM passkey_credentials WHERE employee_id = $1', [empUuid]);
+  assert.equal(Number(pkCountAfterReset.rows[0].cnt), 0);
+
+  assert.equal((await supEmpHandler(makeEvent('PATCH', { id: empUuid, action: 'deactivate' }, supCookie))).statusCode, 200);
+  const supReactEmp = await supEmpHandler(
+    makeEvent('PATCH', { id: empUuid, action: 'reactivate', generatePassword: true }, supCookie),
+  );
+  assert.equal(supReactEmp.statusCode, 200);
+  empTempPwd = JSON.parse(supReactEmp.body).temporaryPassword;
+
+  // 5. Employee EMP-101 logs in (2 concurrent sessions for QA-NEW-04), changes initial password
   const empLogin = await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: empTempPwd }));
   assert.equal(empLogin.statusCode, 200);
   const empCookie = extractCookie(empLogin);
+
+  const empLogin2 = await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: empTempPwd }));
+  const empCookie2 = extractCookie(empLogin2);
+
   assert.equal(
     (await changePinHandler(makeEvent('POST', { currentPassword: empTempPwd, newPassword: 'EmpStrong!2026' }, empCookie))).statusCode,
     200,
   );
+
+  // QA-NEW-04: Changing password on session 1 revokes session 2 while keeping session 1 active
+  assert.ok(JSON.parse((await meHandler(makeEvent('GET', null, empCookie))).body).user);
+  assert.equal(JSON.parse((await meHandler(makeEvent('GET', null, empCookie2))).body).user, null);
+
+  // QA-NEW-04: Expired session token is rejected by auth-me
+  await pool.query(
+    `INSERT INTO sessions (id, employee_id, expires_at)
+     VALUES ('0000000000000000000000000000000000000000000000000000000000000000', $1, now() - interval '1 hour')`,
+    [empUuid],
+  );
+  assert.equal(JSON.parse((await meHandler(makeEvent('GET', null, 'tlm_session=expired_token'))).body).user, null);
 
   // Employee can request passkey registration options once initial password is changed
   const pkOptsOk = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST', null, empCookie));
@@ -308,12 +389,64 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.equal(admAvail.counts.activeSupervisors, 1);
   assert.equal(admAvail.employees.find((e) => e.employeeId === 'EMP-101').leaveReason, 'Sick Leave — Fever');
 
-  // 6. Rate-limiting & 15-minute lockout on EMP-101 after 5 failed attempts
+  // QA-NEW-03: Employee switches from 'leave' to 'office' on same day -> clears leave_reason to null
+  const switchToOffice = await updateAvailHandler(
+    makeEvent('POST', { status: 'office' }, empCookie),
+  );
+  assert.equal(switchToOffice.statusCode, 200);
+  const admAvailAfterSwitch = JSON.parse((await supAvailHandler(makeEvent('GET', null, admCookie))).body);
+  const switchedEmp = admAvailAfterSwitch.employees.find((e) => e.employeeId === 'EMP-101');
+  assert.equal(switchedEmp.status, 'office');
+  assert.equal(switchedEmp.leaveReason, null);
+
+  // QA-NEW-03: Yesterday's IST availability row does not carry over to today
+  const createEmp2 = await supEmpHandler(
+    makeEvent('POST', { fullName: 'Vikram Nair', employeeId: 'EMP-102', role: 'employee', generatePassword: true }, supCookie),
+  );
+  const emp2Uuid = JSON.parse(createEmp2.body).employee.id;
+  await pool.query(
+    `INSERT INTO daily_availability (employee_id, availability_date, status)
+     VALUES ($1, (CURRENT_DATE - INTERVAL '2 days')::date, 'wfh')`,
+    [emp2Uuid],
+  );
+  const pubYesterdayCheck = JSON.parse((await publicAvailHandler(makeEvent('GET'))).body);
+  assert.equal(pubYesterdayCheck.employees.find((e) => e.employeeId === 'EMP-102').status, 'not-updated');
+
+  // 6. SEC-NEW-02: Passkey failed verification increments failed_login_attempts & locks after 5 failures
+  await pool.query(
+    `INSERT INTO passkey_credentials (employee_id, credential_id, public_key, sign_count)
+     VALUES ($1, 'cred-emp-101-locktest', $2, 0)`,
+    [empUuid, Buffer.from([1, 2, 3, 4])],
+  );
   for (let i = 0; i < 4; i++) {
-    assert.equal((await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: 'WrongPassword' }))).statusCode, 401);
+    await pool.query(
+      `INSERT INTO webauthn_challenges (employee_id, challenge, kind, expires_at)
+       VALUES ($1, 'chal-test', 'authentication', now() + interval '5 minutes')`,
+      [empUuid],
+    );
+    const failPk = await passkeyLoginVerify(
+      makeV2Request('http://localhost:8888/api/passkey-login-verify', 'POST', {
+        employeeId: 'EMP-101',
+        assertion: { id: 'cred-emp-101-locktest', response: {} },
+      }),
+    );
+    assert.equal(failPk.status, 401);
   }
-  assert.equal((await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: 'WrongPassword' }))).statusCode, 429);
-  // Locked out from passkey login options too (SEC-02)
+  await pool.query(
+    `INSERT INTO webauthn_challenges (employee_id, challenge, kind, expires_at)
+     VALUES ($1, 'chal-test-5', 'authentication', now() + interval '5 minutes')`,
+    [empUuid],
+  );
+  const fifthFailPk = await passkeyLoginVerify(
+    makeV2Request('http://localhost:8888/api/passkey-login-verify', 'POST', {
+      employeeId: 'EMP-101',
+      assertion: { id: 'cred-emp-101-locktest', response: {} },
+    }),
+  );
+  assert.equal(fifthFailPk.status, 429);
+
+  // Locked out from both password login and passkey login options (SEC-02)
+  assert.equal((await loginHandler(makeEvent('POST', { employeeId: 'EMP-101', password: 'EmpStrong!2026' }))).statusCode, 429);
   const lockedPkRes = await passkeyLoginOpts(makeV2Request('http://localhost:8888/api/passkey-login-options', 'POST', { employeeId: 'EMP-101' }));
   assert.equal(lockedPkRes.status, 429);
 
@@ -358,12 +491,16 @@ test('integration: Master Admin, Supervisor, Employee RBAC, Audit Logs, Security
   assert.equal(supLogs.some((l) => l.action === 'supervisor_created'), false);
   assert.equal(supLogs.some((l) => l.action === 'employee_created'), true);
 
-  // 9. Master Admin settings update & allowPasskeys: false enforcement (SEC-01)
+  // 9. Master Admin settings update & allowPasskeys: false enforcement (SEC-01 & SEC-NEW-03)
   const updSettings = await settingsHandler(
     makeEvent('PATCH', { appTitle: 'Contact Centre Leave', allowPasskeys: false }, admCookie),
   );
   assert.equal(updSettings.statusCode, 200);
   assert.equal(JSON.parse(updSettings.body).settings.initialSetupCompleted, true);
+
+  const pubAfterSettings = JSON.parse((await publicAvailHandler(makeEvent('GET'))).body);
+  assert.equal(pubAfterSettings.settings?.allowPasskeys, false);
+  assert.equal(pubAfterSettings.settings?.appTitle, 'Contact Centre Leave');
 
   const pkDisabledRes = await passkeyRegOpts(makeV2Request('http://localhost:8888/api/passkey-register-options', 'POST', null, empCookie));
   assert.equal(pkDisabledRes.status, 403);

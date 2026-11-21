@@ -50,6 +50,11 @@ export async function revokeEmployeeSessions(pool, employeeId, exceptSessionHash
   }
 }
 
+export async function revokeEmployeePasskeysAndChallenges(pool, employeeId) {
+  await pool.query('DELETE FROM passkey_credentials WHERE employee_id = $1', [employeeId]);
+  await pool.query('DELETE FROM webauthn_challenges WHERE employee_id = $1', [employeeId]);
+}
+
 export async function isPasskeysAllowed(pool) {
   const { rows } = await pool.query("SELECT value FROM app_settings WHERE key = 'system'");
   if (rows.length === 0) return true;

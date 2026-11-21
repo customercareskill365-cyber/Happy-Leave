@@ -26,7 +26,9 @@ const state = {
   loginError: '',
   loginSuccess: '',
   loginLoading: false,
+  browserPasskeySupported: typeof window !== 'undefined' && Boolean(window.PublicKeyCredential),
   passkeySupported: typeof window !== 'undefined' && Boolean(window.PublicKeyCredential),
+  appTitle: 'Team Leave Manager',
 
   statusForm: {
     selectedStatus: null,
@@ -103,6 +105,10 @@ async function refreshPublic() {
   try {
     const data = await api.getPublicAvailability();
     state.publicData = data;
+    if (data?.settings) {
+      state.passkeySupported = state.browserPasskeySupported && data.settings.allowPasskeys !== false;
+      if (data.settings.appTitle) state.appTitle = data.settings.appTitle;
+    }
     state.publicError = '';
     state.lastSyncedAt = new Date().toISOString();
     state.lastFetchedMs = Date.now();
@@ -152,6 +158,10 @@ async function refreshMasterAdmin() {
     state.adminSupervisors = sups.employees || [];
     state.auditLogs = logs.logs || [];
     state.adminSettings = settings.settings || null;
+    if (state.adminSettings) {
+      state.passkeySupported = state.browserPasskeySupported && state.adminSettings.allowPasskeys !== false;
+      if (state.adminSettings.appTitle) state.appTitle = state.adminSettings.appTitle;
+    }
     state.adminError = '';
     state.lastSyncedAt = new Date().toISOString();
     state.lastFetchedMs = Date.now();
