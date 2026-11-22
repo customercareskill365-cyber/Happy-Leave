@@ -3,6 +3,7 @@ import { generateToken, sha256Hex } from './crypto.js';
 import { getSessionCookie } from './http.js';
 
 const SESSION_TTL_HOURS = 12;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function createSession(pool, employeeId) {
   const rawToken = generateToken(32);
@@ -41,8 +42,23 @@ export async function getSessionUser(pool, event) {
   };
 }
 
-export async function revokeEmployeeSessions(pool, employeeId) {
-  await pool.query('DELETE FROM sessions WHERE employee_id = $1', [employeeId]);
+export async function revokeEmployeeSessions(pool, employeeId, exceptSessionHash = null) {
+  if (exceptSessionHash) {
+    await pool.query('DELETE FROM sessions WHERE employee_id = $1 AND id <> $2', [employeeId, exceptSessionHash]);
+  } else {
+    await pool.query('DELETE FROM sessions WHERE employee_id = $1', [employeeId]);
+  }
+}
+
+export async function revokeEmployeePasskeysAndChallenges(pool, employeeId) {
+  await pool.query('DELETE FROM passkey_credentials WHERE employee_id = $1', [employeeId]);
+  await pool.query('DELETE FROM webauthn_challenges WHERE employee_id = $1', [employeeId]);
+}
+
+export async function isPasskeysAllowed(pool) {
+  const { rows } = await pool.query("SELECT value FROM app_settings WHERE key = 'system'");
+  if (rows.length === 0) return true;
+  return rows[0].value?.allowPasskeys !== false;
 }
 
 export async function auditLog(pool, { actorId = null, action, targetId = null, metadata = {} }) {
@@ -83,6 +99,10 @@ export function validateEmployeeIdFormat(empId) {
     return 'User ID must be 2–24 characters (letters, digits, hyphen, underscore).';
   }
   return null;
+}
+
+export function isValidUuid(id) {
+  return typeof id === 'string' && UUID_REGEX.test(id.trim());
 }
 
 export function isMasterAdmin(user) {

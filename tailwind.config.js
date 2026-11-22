@@ -38,6 +38,8 @@ export default {
         'light-on-error': '#FFFFFF',
         'light-error-container': '#FFDAD6',
         'light-on-error-container': '#93000A',
+        'error-container': '#FFDAD6',
+        'on-error-container': '#93000A',
         'light-background': '#F8FAFC',
         'light-on-background': '#1B1C1E',
         'light-surface': '#F8FAFC',

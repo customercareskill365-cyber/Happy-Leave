@@ -7,6 +7,7 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES employ
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_single_master_admin ON employees (role) WHERE role = 'master_admin';
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_emp ON passkey_credentials(employee_id);
 
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,

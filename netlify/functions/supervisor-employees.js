@@ -6,13 +6,14 @@ import {
   getSessionUser,
   isMasterAdmin,
   isSupervisorOrAdmin,
+  revokeEmployeePasskeysAndChallenges,
   revokeEmployeeSessions,
   validateEmployeeIdFormat,
   validatePasswordFormat,
 } from './_lib/auth.js';
 import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET', 'POST', 'PATCH']);
   if (methodErr) return methodErr;
 
@@ -151,6 +152,9 @@ export const handler = withHandler(async (event) => {
   if (!targetId || !action) {
     return jsonResponse(400, { error: 'Account id and action are required.' });
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId)) {
+    return jsonResponse(400, { error: 'Invalid account id format.' });
+  }
 
   const { rows: existingRows } = await pool.query(
     'SELECT id, employee_id, role, is_active FROM employees WHERE id = $1',
@@ -226,6 +230,7 @@ export const handler = withHandler(async (event) => {
       [pinHash, target.id],
     );
     await revokeEmployeeSessions(pool, target.id);
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_password_reset' : 'password_reset',
@@ -245,6 +250,7 @@ export const handler = withHandler(async (event) => {
       [target.id],
     );
     await revokeEmployeeSessions(pool, target.id);
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_deactivated' : 'employee_deactivated',
@@ -269,6 +275,7 @@ export const handler = withHandler(async (event) => {
        WHERE id = $2`,
       [pinHash, target.id],
     );
+    await revokeEmployeePasskeysAndChallenges(pool, target.id);
     await auditLog(pool, {
       actorId: user.id,
       action: target.role === 'supervisor' ? 'supervisor_reactivated' : 'employee_reactivated',

@@ -1,14 +1,15 @@
 import pg from 'pg';
 import { hashPin } from '../netlify/functions/_lib/crypto.js';
+import { normalizePgConnectionConfig, resolveConnectionString } from '../netlify/functions/_lib/db.js';
 
 /**
  * Seeds initial supervisor accounts (and optional dummy employees when SEED_DUMMY_EMPLOYEES=true).
  * Never hardcodes production PINs: reads INITIAL_SUP1_PIN / INITIAL_SUP2_PIN from env.
  */
 async function main() {
-  const connectionString = process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
+  const connectionString = resolveConnectionString();
   if (!connectionString) {
-    console.error('Missing NETLIFY_DATABASE_URL or DATABASE_URL.');
+    console.error('Missing NETLIFY_DB_URL or DATABASE_URL.');
     process.exit(1);
   }
 
@@ -19,11 +20,7 @@ async function main() {
     process.exit(1);
   }
 
-  const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
-  const pool = new pg.Pool({
-    connectionString,
-    ssl: isLocal ? false : { rejectUnauthorized: false },
-  });
+  const pool = new pg.Pool(normalizePgConnectionConfig(connectionString));
 
   try {
     const supervisors = [

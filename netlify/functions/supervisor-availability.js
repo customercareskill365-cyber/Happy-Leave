@@ -3,7 +3,7 @@ import { getSessionUser, isSupervisorOrAdmin } from './_lib/auth.js';
 import { getIstDateString } from './_lib/ist.js';
 import { jsonResponse, requireMethod, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET']);
   if (methodErr) return methodErr;
 
@@ -14,6 +14,9 @@ export const handler = withHandler(async (event) => {
   }
   if (!isSupervisorOrAdmin(user)) {
     return jsonResponse(403, { error: 'Supervisor or Master Admin access required.' });
+  }
+  if (user.mustChangePin) {
+    return jsonResponse(403, { error: 'Please change your initial password first.' });
   }
 
   const availabilityDate = getIstDateString();

@@ -16,7 +16,6 @@
     "@netlify/database": "^2.0.3",
     "@simplewebauthn/browser": "^13.1.0",
     "@simplewebauthn/server": "^13.1.1",
-    "argon2": "^0.41.1",
     "lucide": "^0.468.0",
     "pg": "^8.13.1"
   },

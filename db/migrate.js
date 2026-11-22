@@ -2,38 +2,63 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { normalizePgConnectionConfig, resolveConnectionString } from '../netlify/functions/_lib/db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const connectionString =
-    process.env.NETLIFY_DB_URL ||
-    process.env.DATABASE_URL ||
-    process.env.NETLIFY_DATABASE_URL;
+  const connectionString = resolveConnectionString();
 
   if (!connectionString) {
     console.error('Missing NETLIFY_DB_URL or DATABASE_URL environment variable.');
     process.exit(1);
   }
 
-  const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
-  const pool = new pg.Pool({
-    connectionString,
-    ssl: isLocal ? false : { rejectUnauthorized: false },
-  });
+  const forceRerun = process.argv.includes('--force');
+  const pool = new pg.Pool(normalizePgConnectionConfig(connectionString));
+  const client = await pool.connect();
 
   try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+
+    const { rows: appliedRows } = await client.query('SELECT filename FROM schema_migrations');
+    const appliedSet = new Set(appliedRows.map((r) => r.filename));
+
     const migrationsDir = path.join(__dirname, 'migrations');
     const files = (await fs.readdir(migrationsDir))
       .filter((f) => f.endsWith('.sql') && !f.endsWith('.down.sql'))
       .sort();
 
     for (const file of files) {
+      if (!forceRerun && appliedSet.has(file)) {
+        console.log(`Skipped already-applied migration: ${file}`);
+        continue;
+      }
+
       const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
-      await pool.query(sql);
-      console.log(`Applied migration: ${file}`);
+      await client.query('BEGIN');
+      try {
+        await client.query(sql);
+        await client.query(
+          `INSERT INTO schema_migrations (filename, applied_at)
+           VALUES ($1, now())
+           ON CONFLICT (filename) DO UPDATE SET applied_at = now()`,
+          [file],
+        );
+        await client.query('COMMIT');
+        console.log(`Applied migration: ${file}`);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      }
     }
   } finally {
+    client.release();
     await pool.end();
   }
 }

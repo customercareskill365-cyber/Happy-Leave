@@ -1,34 +1,41 @@
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { getPool } from './_lib/db.js';
-import { validateEmployeeIdFormat } from './_lib/auth.js';
-import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin } from './_lib/http.js';
+import { isPasskeysAllowed, validateEmployeeIdFormat } from './_lib/auth.js';
+import { getRpAndOrigin, jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export async function handler(event) {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
   const originErr = requireSameOrigin(event);
   if (originErr) return originErr;
 
+  const pool = getPool();
+  if (!(await isPasskeysAllowed(pool))) {
+    return jsonResponse(403, { error: 'Passkeys are disabled by the administrator.' });
+  }
+
   const body = parseJsonBody(event);
   if (!body) return jsonResponse(400, { error: 'Invalid JSON payload.' });
 
   const employeeId = typeof body.employeeId === 'string' ? body.employeeId.trim().toUpperCase() : '';
   if (validateEmployeeIdFormat(employeeId)) {
-    return jsonResponse(400, { error: 'Valid Employee ID is required.' });
+    return jsonResponse(400, { error: 'Valid User ID is required.' });
   }
 
-  const pool = getPool();
   const { rows: empRows } = await pool.query(
-    'SELECT id, is_active, must_change_pin FROM employees WHERE employee_id = $1',
+    'SELECT id, is_active, must_change_pin, locked_until FROM employees WHERE employee_id = $1',
     [employeeId],
   );
   if (empRows.length === 0 || !empRows[0].is_active) {
-    return jsonResponse(404, { error: 'No active passkey found for this Employee ID.' });
+    return jsonResponse(404, { error: 'No active passkey found for this User ID.' });
   }
   const emp = empRows[0];
+  if (emp.locked_until && new Date(emp.locked_until) > new Date()) {
+    return jsonResponse(429, { error: 'Account temporarily locked due to failed login attempts.' });
+  }
   if (emp.must_change_pin) {
-    return jsonResponse(403, { error: 'Please sign in with your temporary PIN first.' });
+    return jsonResponse(403, { error: 'Please sign in with your temporary password first.' });
   }
 
   const { rows: creds } = await pool.query(
@@ -36,11 +43,10 @@ export async function handler(event) {
     [emp.id],
   );
   if (creds.length === 0) {
-    return jsonResponse(404, { error: 'No passkey registered for this Employee ID. Sign in with PIN first.' });
+    return jsonResponse(404, { error: 'No passkey registered for this User ID. Sign in with password first.' });
   }
 
-  const hostHeader = event.headers?.host || event.headers?.Host || 'localhost:8888';
-  const rpID = hostHeader.split(':')[0];
+  const { rpID } = getRpAndOrigin(event);
 
   const options = await generateAuthenticationOptions({
     rpID,
@@ -62,4 +68,4 @@ export async function handler(event) {
   );
 
   return jsonResponse(200, options);
-}
+});

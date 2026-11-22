@@ -24,7 +24,7 @@ export function renderUpdateStatusView(state) {
         </div>
         <div>
           <h2 class="font-headline text-headline-md text-light-on-surface">Employee Verification Required</h2>
-          <p class="font-body text-body-md text-light-on-surface-variant mt-1">Sign in with your Employee ID & PIN (or registered Passkey) to update your own daily availability.</p>
+          <p class="font-body text-body-md text-light-on-surface-variant mt-1">Sign in with your User ID & Password (or registered Passkey) to update your own daily availability.</p>
         </div>
         <a href="/login?next=/update" data-link class="inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[48px] rounded bg-light-primary text-light-on-primary hover:bg-light-primary-container transition-colors duration-state-change">
           <i data-lucide="log-in" class="w-4 h-4" aria-hidden="true"></i>
@@ -107,21 +107,21 @@ export function renderUpdateStatusView(state) {
             ${!selected ? '<span class="font-label text-label-sm text-warning bg-warning-container px-2.5 py-0.5 rounded-full">Select an option</span>' : ''}
           </div>
           <div class="grid grid-cols-1 gap-3">
-            <button type="button" data-select-status="office" class="${optionCardClass('office')}">
+            <button type="button" aria-pressed="${selected === 'office'}" data-select-status="office" class="${optionCardClass('office')}">
               <div class="w-10 h-10 rounded-full ${selected === 'office' ? 'bg-available text-on-available' : 'bg-available-container text-on-available-container'} flex items-center justify-center shrink-0">
                 <i data-lucide="building-2" class="w-5 h-5" aria-hidden="true"></i>
               </div>
               <span class="font-headline text-headline-sm text-light-on-surface">Working from Office</span>
             </button>
 
-            <button type="button" data-select-status="wfh" class="${optionCardClass('wfh')}">
+            <button type="button" aria-pressed="${selected === 'wfh'}" data-select-status="wfh" class="${optionCardClass('wfh')}">
               <div class="w-10 h-10 rounded-full ${selected === 'wfh' ? 'bg-light-tertiary text-light-on-tertiary' : 'bg-light-tertiary-container text-light-on-tertiary-container'} flex items-center justify-center shrink-0">
                 <i data-lucide="laptop" class="w-5 h-5" aria-hidden="true"></i>
               </div>
               <span class="font-headline text-headline-sm text-light-on-surface">Working from Home (WFH)</span>
             </button>
 
-            <button type="button" data-select-status="leave" class="${optionCardClass('leave')}">
+            <button type="button" aria-pressed="${selected === 'leave'}" data-select-status="leave" class="${optionCardClass('leave')}">
               <div class="w-10 h-10 rounded-full ${selected === 'leave' ? 'bg-leave text-on-leave' : 'bg-leave-container text-on-leave-container'} flex items-center justify-center shrink-0">
                 <i data-lucide="calendar-off" class="w-5 h-5" aria-hidden="true"></i>
               </div>
@@ -150,7 +150,7 @@ export function renderUpdateStatusView(state) {
 
           <label class="flex flex-col gap-1.5">
             <span class="font-label text-label-md text-light-on-surface">Reason Note (Required when On Leave)</span>
-            <input id="leaveNoteInput" type="text" maxlength="240" value="${escapeHtml(statusForm.leaveNote)}" placeholder="Enter brief reason for supervisor review..." class="w-full px-3.5 py-2.5 min-h-11 rounded border border-light-outline-variant bg-light-surface text-light-on-surface font-body text-body-md placeholder:text-light-on-surface-variant focus:border-light-primary focus:ring-2 focus:ring-light-primary/20 focus:outline-none">
+            <input id="leaveNoteInput" type="text" maxlength="240" ${selected === 'leave' ? 'required' : ''} value="${escapeHtml(statusForm.leaveNote)}" placeholder="Enter brief reason for supervisor review..." class="w-full px-3.5 py-2.5 min-h-11 rounded border border-light-outline-variant bg-light-surface text-light-on-surface font-body text-body-md placeholder:text-light-on-surface-variant focus:border-light-primary focus:ring-2 focus:ring-light-primary/20 focus:outline-none">
           </label>
         </div>
 
@@ -163,12 +163,12 @@ export function renderUpdateStatusView(state) {
         </div>
       </form>
 
-      <!-- Account Security & Device Passkey Card -->
+      <!-- Account Security: Self-Service Password Change & Device Passkey Card -->
       <section class="bg-light-surface-container-lowest border border-light-outline-variant rounded-md p-5 shadow-sm flex flex-col gap-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 class="font-headline text-headline-sm text-light-on-surface">Account Security</h3>
-            <p class="font-body text-body-sm text-light-on-surface-variant">Manage your PIN or register a device passkey for faster sign-in.</p>
+            <p class="font-body text-body-sm text-light-on-surface-variant">Change your password/PIN or register a device passkey for faster sign-in.</p>
           </div>
           ${
             passkeySupported
@@ -179,8 +179,27 @@ export function renderUpdateStatusView(state) {
               : ''
           }
         </div>
-        ${statusForm.securityMessage ? `<p class="font-body text-body-sm text-on-available-container bg-available-container px-3 py-2 rounded">${escapeHtml(statusForm.securityMessage)}</p>` : ''}
-        ${statusForm.securityError ? `<p class="font-body text-body-sm text-light-on-error-container bg-error-container px-3 py-2 rounded">${escapeHtml(statusForm.securityError)}</p>` : ''}
+
+        ${statusForm.securityMessage ? `<p role="status" class="font-body text-body-sm text-on-available-container bg-available-container px-3 py-2 rounded">${escapeHtml(statusForm.securityMessage)}</p>` : ''}
+        ${statusForm.securityError ? `<p role="alert" class="font-body text-body-sm text-light-on-error-container bg-error-container px-3 py-2 rounded">${escapeHtml(statusForm.securityError)}</p>` : ''}
+
+        <form id="selfChangePasswordForm" class="pt-3 border-t border-light-outline-variant grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+          <label class="flex flex-col gap-1">
+            <span class="font-label text-label-sm text-light-on-surface">Current Password / PIN</span>
+            <input name="currentPassword" type="password" required autocomplete="current-password" placeholder="Current" class="px-3 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-sm">
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="font-label text-label-sm text-light-on-surface">New Password / PIN (4–64 chars)</span>
+            <input name="newPassword" type="password" minlength="4" maxlength="64" required autocomplete="new-password" placeholder="New password" class="px-3 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-sm">
+          </label>
+          <div class="flex gap-2">
+            <label class="flex-1 flex flex-col gap-1">
+              <span class="font-label text-label-sm text-light-on-surface">Confirm New</span>
+              <input name="confirmPassword" type="password" minlength="4" maxlength="64" required autocomplete="new-password" placeholder="Confirm" class="px-3 py-2 min-h-10 rounded border border-light-outline-variant bg-light-surface font-mono text-mono-sm">
+            </label>
+            <button type="submit" class="self-end px-3.5 py-2 min-h-10 rounded bg-light-primary text-light-on-primary font-label text-label-sm shrink-0">Update</button>
+          </div>
+        </form>
       </section>
     </div>
   `;
@@ -265,6 +284,40 @@ export function bindUpdateStatusEvents(root, state, { refreshSession, refreshPub
         onStateChange();
       } catch (err) {
         state.statusForm.securityError = err.message || 'Passkey registration cancelled or failed.';
+        onStateChange();
+      }
+    });
+  }
+
+  const selfPwdForm = root.querySelector('#selfChangePasswordForm');
+  if (selfPwdForm) {
+    selfPwdForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(selfPwdForm);
+      const cur = fd.get('currentPassword').toString();
+      const nw = fd.get('newPassword').toString().trim();
+      const cf = fd.get('confirmPassword').toString().trim();
+      state.statusForm.securityMessage = '';
+      state.statusForm.securityError = '';
+
+      if (nw !== cf) {
+        state.statusForm.securityError = 'New password and confirmation do not match.';
+        onStateChange();
+        return;
+      }
+      if (/\s/.test(nw)) {
+        state.statusForm.securityError = 'Password cannot contain spaces.';
+        onStateChange();
+        return;
+      }
+
+      try {
+        await api.changePassword(cur, nw);
+        state.statusForm.securityMessage = 'Your password has been updated.';
+        selfPwdForm.reset();
+        onStateChange();
+      } catch (err) {
+        state.statusForm.securityError = err.message || 'Could not update password.';
         onStateChange();
       }
     });

@@ -1,9 +1,9 @@
 import { getPool } from './_lib/db.js';
 import { hashPin, verifyPin } from './_lib/crypto.js';
-import { auditLog, getSessionUser, validatePasswordFormat } from './_lib/auth.js';
+import { auditLog, getSessionUser, revokeEmployeeSessions, validatePasswordFormat } from './_lib/auth.js';
 import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['POST']);
   if (methodErr) return methodErr;
 
@@ -19,8 +19,18 @@ export const handler = withHandler(async (event) => {
   const body = parseJsonBody(event);
   if (!body) return jsonResponse(400, { error: 'Invalid JSON payload.' });
 
-  const currentSecret = typeof body.currentPassword === 'string' ? body.currentPassword : typeof body.currentPin === 'string' ? body.currentPin : '';
-  const newSecret = typeof body.newPassword === 'string' ? body.newPassword.trim() : typeof body.newPin === 'string' ? body.newPin.trim() : '';
+  const currentSecret =
+    typeof body.currentPassword === 'string'
+      ? body.currentPassword
+      : typeof body.currentPin === 'string'
+        ? body.currentPin
+        : '';
+  const newSecret =
+    typeof body.newPassword === 'string'
+      ? body.newPassword.trim()
+      : typeof body.newPin === 'string'
+        ? body.newPin.trim()
+        : '';
 
   const passErr = validatePasswordFormat(newSecret);
   if (passErr) {
@@ -47,6 +57,9 @@ export const handler = withHandler(async (event) => {
      WHERE id = $2`,
     [newHash, user.id],
   );
+
+  // Revoke any other active sessions for this user while preserving the current session
+  await revokeEmployeeSessions(pool, user.id, user.sessionHash);
 
   await auditLog(pool, {
     actorId: user.id,

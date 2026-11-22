@@ -2,7 +2,7 @@ import { getPool } from './_lib/db.js';
 import { auditLog, getSessionUser, isMasterAdmin } from './_lib/auth.js';
 import { jsonResponse, parseJsonBody, requireMethod, requireSameOrigin, withHandler } from './_lib/http.js';
 
-export const handler = withHandler(async (event) => {
+export default withHandler(async (event) => {
   const methodErr = requireMethod(event, ['GET', 'PATCH']);
   if (methodErr) return methodErr;
 
@@ -13,6 +13,9 @@ export const handler = withHandler(async (event) => {
   }
   if (!isMasterAdmin(user)) {
     return jsonResponse(403, { error: 'Master Admin access required.' });
+  }
+  if (user.mustChangePin) {
+    return jsonResponse(403, { error: 'Please change your initial password first.' });
   }
 
   const method = event.httpMethod.toUpperCase();

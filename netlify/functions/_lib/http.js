@@ -1,3 +1,5 @@
+import { ensureSchema, getPool } from './db.js';
+
 const SESSION_COOKIE_NAME = 'tlm_session';
 const SESSION_MAX_AGE_SEC = 12 * 60 * 60; // 12 hours
 
@@ -14,19 +16,97 @@ export function jsonResponse(statusCode, body, extraHeaders = {}) {
   };
 }
 
+function isWebRequest(req) {
+  return (
+    req &&
+    typeof req.url === 'string' &&
+    typeof req.method === 'string' &&
+    req.headers &&
+    typeof req.headers.forEach === 'function'
+  );
+}
+
+async function normalizeToEvent(reqOrEvent) {
+  if (!isWebRequest(reqOrEvent)) {
+    return { isV2: false, event: reqOrEvent };
+  }
+
+  const headers = {};
+  reqOrEvent.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  const url = new URL(reqOrEvent.url);
+  const queryStringParameters = {};
+  for (const [k, v] of url.searchParams.entries()) {
+    queryStringParameters[k] = v;
+  }
+
+  const method = (reqOrEvent.method || 'GET').toUpperCase();
+  let body = null;
+  if (method !== 'GET' && method !== 'HEAD') {
+    const text = await reqOrEvent.text();
+    body = text || null;
+  }
+
+  return {
+    isV2: true,
+    event: {
+      httpMethod: method,
+      headers,
+      queryStringParameters,
+      body,
+      isBase64Encoded: false,
+      rawUrl: reqOrEvent.url,
+    },
+  };
+}
+
+function toResult(resObj, isV2) {
+  if (!isV2) return resObj;
+  return new Response(resObj.body ?? '', {
+    status: resObj.statusCode || 200,
+    headers: resObj.headers || {},
+  });
+}
+
 export function withHandler(fn) {
-  return async (event, context) => {
+  return async (reqOrEvent, context) => {
+    let isV2 = isWebRequest(reqOrEvent);
     try {
-      return await fn(event, context);
+      const normalized = await normalizeToEvent(reqOrEvent);
+      isV2 = normalized.isV2;
+      // Ensure database connection and idempotent schema exist before executing handler
+      const pool = getPool();
+      await ensureSchema(pool);
+      const result = await fn(normalized.event, context);
+      return toResult(result, isV2);
     } catch (err) {
       if (err?.name === 'DbUnavailableError') {
-        return jsonResponse(503, { error: err.message });
+        return toResult(jsonResponse(503, { error: err.message }), isV2);
       }
-      if (err?.code === 'ECONNREFUSED' || err?.code === 'ENOTFOUND' || err?.code === '28P01') {
-        return jsonResponse(503, { error: 'Database connection unavailable. Check database configuration.' });
+      if (
+        err?.code === 'ECONNREFUSED' ||
+        err?.code === 'ENOTFOUND' ||
+        err?.code === 'ETIMEDOUT' ||
+        err?.code === '28P01' ||
+        err?.code === '57P01' ||
+        err?.code === '57P03' ||
+        err?.code === '3D000'
+      ) {
+        return toResult(
+          jsonResponse(503, { error: 'Database connection unavailable. Check database configuration.' }),
+          isV2,
+        );
+      }
+      if (err?.code === '42P01' || err?.code === '42703') {
+        return toResult(
+          jsonResponse(503, { error: 'Database schema is not initialized. Run npm run db:migrate.' }),
+          isV2,
+        );
       }
       console.error('Unhandled function error:', err?.message || err);
-      return jsonResponse(500, { error: 'Internal server error.' });
+      return toResult(jsonResponse(500, { error: 'Internal server error.' }), isV2);
     }
   };
 }
@@ -52,15 +132,43 @@ export function requireMethod(event, allowedMethods) {
   return null;
 }
 
+function firstHeaderVal(val) {
+  if (!val || typeof val !== 'string') return '';
+  return val.split(',')[0].trim();
+}
+
+export function getEffectiveHost(event) {
+  const headers = event.headers || {};
+  const fwdHost = firstHeaderVal(headers['x-forwarded-host'] || headers['X-Forwarded-Host']);
+  if (fwdHost) return fwdHost;
+  return firstHeaderVal(headers.host || headers.Host) || 'localhost:8888';
+}
+
+export function getRpAndOrigin(event) {
+  const headers = event.headers || {};
+  const hostHeader = getEffectiveHost(event);
+  const rpID = hostHeader.split(':')[0];
+  const fwdProto = firstHeaderVal(headers['x-forwarded-proto'] || headers['X-Forwarded-Proto']);
+  const proto = fwdProto || (rpID === 'localhost' || rpID === '127.0.0.1' ? 'http' : 'https');
+  const origin = `${proto}://${hostHeader}`;
+  return { rpName: 'Team Leave Manager', rpID, origin };
+}
+
 export function requireSameOrigin(event) {
   const headers = event.headers || {};
+  const secFetchSite = (headers['sec-fetch-site'] || headers['Sec-Fetch-Site'] || '').toLowerCase();
+  if (secFetchSite === 'cross-site') {
+    return jsonResponse(403, { error: 'Cross-site request rejected.' });
+  }
+
   const origin = headers.origin || headers.Origin;
-  const host = headers.host || headers.Host;
-  if (!origin || !host) return null;
+  const host = firstHeaderVal(headers.host || headers.Host);
+  const fwdHost = firstHeaderVal(headers['x-forwarded-host'] || headers['X-Forwarded-Host']);
+  if (!origin || (!host && !fwdHost)) return null;
 
   try {
     const originHost = new URL(origin).host;
-    if (originHost !== host) {
+    if (originHost !== host && originHost !== fwdHost) {
       return jsonResponse(403, { error: 'Cross-origin request rejected.' });
     }
   } catch {
@@ -77,7 +185,13 @@ export function parseCookies(event) {
     if (idx === -1) continue;
     const key = part.slice(0, idx).trim();
     const val = part.slice(idx + 1).trim();
-    if (key) out[key] = decodeURIComponent(val);
+    if (key) {
+      try {
+        out[key] = decodeURIComponent(val);
+      } catch {
+        out[key] = val;
+      }
+    }
   }
   return out;
 }
@@ -88,9 +202,10 @@ export function getSessionCookie(event) {
 }
 
 function isSecureRequest(event) {
-  const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'];
+  const proto = firstHeaderVal(event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto']);
   if (proto === 'https') return true;
-  const host = event.headers?.host || event.headers?.Host || '';
+  if (typeof event.rawUrl === 'string' && event.rawUrl.startsWith('https://')) return true;
+  const host = getEffectiveHost(event);
   return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
 }
 
